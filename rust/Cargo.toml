@@ -19,7 +19,7 @@ opt-level = "z"      # 优先体积
 lto = true           # 链接时优化,去无用代码
 codegen-units = 1    # 更充分的跨单元优化(更小)
 strip = true         # 去符号表
-panic = "abort"      # 去掉栈展开表,显著减小体积
+panic = "abort"      # size-profile:panic  去掉栈展开表(safe 档由脚本注释此行)
 # 代价:Rust panic 直接 abort 进程,不再被 frb 捕获转成 Dart 异常。
 # 纯计算的模糊匹配正常输入不会 panic,只有内部 bug 才会。
 # CI 预编译进一步叠加 nightly build-std(见 cargokit.yaml)+ RUSTFLAGS

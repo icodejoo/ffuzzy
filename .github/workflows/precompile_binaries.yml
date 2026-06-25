@@ -36,6 +36,18 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # 自动探测体积档位:cargokit.yaml 里有生效(未注释)的 build-std 才算「极致压缩档」。
+      # 由 scripts/size-profile.sh 切换;此处据此决定 desktop/android 是否加 immediate-abort。
+      - name: Detect size profile
+        id: sp
+        shell: bash
+        run: |
+          if grep -qE '^[[:space:]]+- "-Zbuild-std' rust/cargokit.yaml; then
+            echo "extreme=1" >> "$GITHUB_OUTPUT"; echo "极致压缩档"
+          else
+            echo "extreme=0" >> "$GITHUB_OUTPUT"; echo "稳妥档"
+          fi
+
       # cargo-zigbuild 由 cargokit 自动 `cargo install`,但 zig 本身要单独装。
       - name: Setup Zig (for cross-linux)
         if: ${{ matrix.kind == 'cross-linux' }}
@@ -53,8 +65,8 @@ jobs:
         env:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # immediate-abort 进一步压体积;只作用于带 --target 的产物,不污染 host proc-macro。
-          RUSTFLAGS: "-Zunstable-options -Cpanic=immediate-abort"
+          # 极致压缩档才加 immediate-abort;只作用于带 --target 的产物,不污染 host proc-macro。
+          RUSTFLAGS: ${{ steps.sp.outputs.extreme == '1' && '-Zunstable-options -Cpanic=immediate-abort' || '' }}
         run: >
           dart run build_tool precompile-binaries -v
           --manifest-dir=../../rust
@@ -66,8 +78,8 @@ jobs:
         env:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # immediate-abort 进一步压体积;android 不走 zigbuild,无 host cargo install 被污染之虞。
-          RUSTFLAGS: "-Zunstable-options -Cpanic=immediate-abort"
+          # 极致压缩档才加 immediate-abort;android 不走 zigbuild,无 host cargo install 被污染之虞。
+          RUSTFLAGS: ${{ steps.sp.outputs.extreme == '1' && '-Zunstable-options -Cpanic=immediate-abort' || '' }}
         run: >
           dart run build_tool precompile-binaries -v
           --manifest-dir=../../rust

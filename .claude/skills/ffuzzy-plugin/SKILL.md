@@ -167,3 +167,21 @@ feature 这条路走不通(0.3.1 在 `default-features=false` 下编不过)。
 ③ workflow 里 desktop/android job 的 `RUSTFLAGS=-Zunstable-options -Cpanic=immediate-abort`(cross-linux 不设,
 见上文 zigbuild 说明)。本机 `flutter test` 走 stable 直编,只吃到 ①(~373KB),不影响发布产物。
 Android 发布建议 `--split-per-abi`,每个 APK 只带一个架构的 .so。
+
+### 两档可切换(extreme / safe)
+
+怕极致压缩(nightly build-std/immediate-abort)出问题,保留了一键回退到原始 ~600KB 配置:
+
+```bash
+bash scripts/size-profile.sh extreme   # 极致压缩(默认,~265–320KB)
+bash scripts/size-profile.sh safe      # 稳妥(原始 ~600KB,纯 stable,无 nightly/build-std)
+bash scripts/size-profile.sh status    # 看当前档
+```
+
+机制:差异只在 ①②(`Cargo.toml` 的 panic 行、`cargokit.yaml` 的 `cargo` 段,都带 `size-profile:` 标记),
+脚本注释/反注释这两处即可;③ 的 workflow **自动探测** `cargokit.yaml` 是否有生效的 build-std 来决定加不加
+RUSTFLAGS(单一事实来源 = 提交里的配置,脚本与 workflow 不会失配)。
+
+⚠️ **切档 = crate-hash 变**。切完必须:提交 → 推送 → 重跑 Precompile 工作流(生成新 hash 的二进制)→
+发新版本。使用者按 hash 下载,两套配置无法对同一发布版本同时生效;若极致档发布后才发现问题,走「切 safe →
+重跑 CI → 发 0.x.+1」即可。
