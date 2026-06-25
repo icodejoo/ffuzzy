@@ -1,0 +1,23 @@
+[package]
+name = "rust_lib_ffuzzy"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+flutter_rust_bridge = "=2.12.0"
+nucleo-matcher = "0.3"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+# 体积优化:打进 App 的原生库越小越好。
+[profile.release]
+opt-level = "z"      # 优先体积
+lto = true           # 链接时优化,去无用代码
+codegen-units = 1    # 更充分的跨单元优化(更小)
+strip = true         # 去符号表
+# 注:未启用 panic = "abort"(会破坏 frb 的 panic→Dart 异常桥接);
+# 如需再压一点且可接受 Rust panic 直接 abort,可自行加上。
