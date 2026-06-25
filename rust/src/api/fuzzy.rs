@@ -66,6 +66,10 @@ impl Default for FuzzyConfig {
 /// 并行阈值：候选数 >= 此值才考虑多核（小数据并行开销不划算）。
 const PARALLEL_THRESHOLD: usize = 20_000;
 
+/// 增量复用上限：上次命中集超过此值就不复用（串行子集扫会比并行全扫还慢），改走并行全扫且不缓存。
+/// 只有当查询收窄到命中 <= 此值时增量才介入，从而**绝不**比并行全扫更慢。
+const INCR_CAP: usize = 20_000;
+
 #[cfg(not(target_arch = "wasm32"))]
 fn num_threads(len: usize) -> usize {
     let cores = std::thread::available_parallelism()
@@ -512,6 +516,10 @@ pub struct FuzzyCorpus {
     /// 增量搜索缓存（`Mutex` 因 `filter` 是 `&self` 且异步在 worker 线程跑）。
     /// 任何增删改/free 都会清空。
     incr: std::sync::Mutex<Option<IncrCache>>,
+    /// 惰性折叠副本缓存：当 `ignore_case_indices=false`（无常驻 `folded`）却用 `ignore_case=true`
+    /// 的简单模式时，**首次查询构建一次**并缓存（`Arc` 便于短持锁克隆),避免每查都全量降小写。
+    /// 任何增删改/free 失效。
+    folded_cache: std::sync::Mutex<Option<std::sync::Arc<Vec<String>>>>,
 }
 
 fn build_haystacks(items: &[String]) -> Vec<Utf32String> {
@@ -568,14 +576,29 @@ impl FuzzyCorpus {
             folded,
             keep_folded: ignore_case_indices,
             incr: std::sync::Mutex::new(None),
+            folded_cache: std::sync::Mutex::new(None),
         }
     }
 
-    /// 清空增量缓存（任何结构性变更后调用）。
-    fn clear_incr(&self) {
+    /// 清空易失缓存（增量 + 惰性折叠;任何结构性变更/free 后调用）。
+    fn clear_caches(&self) {
         if let Ok(mut g) = self.incr.lock() {
             *g = None;
         }
+        if let Ok(mut g) = self.folded_cache.lock() {
+            *g = None;
+        }
+    }
+
+    /// 取惰性折叠副本（无则构建并缓存）。短持锁:命中直接 clone `Arc`,未命中构建后存。
+    fn lazy_folded(&self) -> std::sync::Arc<Vec<String>> {
+        let mut g = self.folded_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(a) = g.as_ref() {
+            return a.clone();
+        }
+        let a = std::sync::Arc::new(build_folded(&self.items));
+        *g = Some(a.clone());
+        a
     }
 
     /// 用一组候选项构建语料。`ignore_case_indices=true` 时额外常驻一份折叠副本。
@@ -594,7 +617,7 @@ impl FuzzyCorpus {
             fd.extend(items.iter().map(|s| s.to_lowercase()));
         }
         self.items.extend(items);
-        self.clear_incr();
+        self.clear_caches();
     }
 
     /// 替换指定下标（越界忽略）。
@@ -611,7 +634,7 @@ impl FuzzyCorpus {
             fd[i] = item.to_lowercase();
         }
         self.items[i] = item;
-        self.clear_incr();
+        self.clear_caches();
     }
 
     /// 批量按下标删除（内部降序去重）。
@@ -631,7 +654,7 @@ impl FuzzyCorpus {
                 }
             }
         }
-        self.clear_incr();
+        self.clear_caches();
     }
 
     /// 清空全部候选（保留实例与驻留状态）。
@@ -644,7 +667,7 @@ impl FuzzyCorpus {
         if let Some(fd) = self.folded.as_mut() {
             fd.clear();
         }
-        self.clear_incr();
+        self.clear_caches();
     }
 
     #[frb(sync)]
@@ -667,7 +690,7 @@ impl FuzzyCorpus {
     pub fn free(&mut self) {
         self.haystacks = None;
         self.folded = None;
-        self.clear_incr();
+        self.clear_caches();
     }
 
     /// 从源字符串重建 Utf32 索引（及折叠副本，若启用）。无跨 FFI 编组开销。幂等。
@@ -688,14 +711,14 @@ impl FuzzyCorpus {
         } else {
             query.to_string()
         };
-        let owned_folded;
+        let lazy_arc;
         let source: &[String] = match (cfg.ignore_case, &self.folded) {
-            // ignore_case + 有常驻折叠副本：快路径。
+            // ignore_case + 有常驻折叠副本（ignoreCaseIndices=true）：最快路径。
             (true, Some(folded)) => folded,
-            // ignore_case + 无折叠副本：临时折叠（慢，少数路径）。
+            // ignore_case + 无常驻副本：用惰性缓存（首查构建一次,后续复用），避免每查全量降小写。
             (true, None) => {
-                owned_folded = build_folded(&self.items);
-                &owned_folded
+                lazy_arc = self.lazy_folded();
+                lazy_arc.as_slice()
             }
             // 区分大小写：用原样源。
             (false, _) => &self.items,
@@ -722,23 +745,28 @@ impl FuzzyCorpus {
                 let reusable = c.ignore_case == cfg.ignore_case
                     && c.normalize == cfg.normalize
                     && !c.query.is_empty()
+                    && c.hits.len() <= INCR_CAP // 命中集过大不复用(串行子集扫 < 并行全扫)
                     && query.starts_with(&c.query);
                 reusable.then(|| c.hits.clone())
             })
         };
         let scored = match subset {
             Some(hits) => scan_subset(haystacks, &hits, query, cfg),
-            None => scan_haystacks(haystacks, query, cfg),
+            None => scan_haystacks(haystacks, query, cfg), // 可并行
         };
-        // 写缓存：记录本次**全部命中**下标（非 top-N），供下次追加扩展复用。
+        // 写缓存：只缓存"足够小"的命中集（大集留着也只会触发慢的串行扫，不如下次并行全扫）。
         {
             let mut g = self.incr.lock().unwrap_or_else(|e| e.into_inner());
-            *g = Some(IncrCache {
-                query: query.to_string(),
-                ignore_case: cfg.ignore_case,
-                normalize: cfg.normalize,
-                hits: scored.iter().map(|s| s.index).collect(),
-            });
+            *g = if scored.len() <= INCR_CAP {
+                Some(IncrCache {
+                    query: query.to_string(),
+                    ignore_case: cfg.ignore_case,
+                    normalize: cfg.normalize,
+                    hits: scored.iter().map(|s| s.index).collect(),
+                })
+            } else {
+                None
+            };
         }
         finish_fuzzy(haystacks, scored, query, cfg, limit)
     }
