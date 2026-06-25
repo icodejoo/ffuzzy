@@ -1,0 +1,64 @@
+name: Precompile Binaries
+
+# 手动触发:在 GitHub 仓库 Actions 页面点 "Run workflow"。
+# 每次改动 rust/ 源码或依赖后都要重跑一次(crate-hash 会变),再发布到 pub.dev。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # 需要创建 Release、上传二进制资产
+
+jobs:
+  precompile:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1   # 串行,避免三台 runner 同时创建同一个 Release 冲突
+      matrix:
+        include:
+          - os: ubuntu-latest   # linux-x64 + Android 四架构
+            android: true
+          - os: macos-latest    # macOS(x64/arm64) + iOS(真机/模拟器)
+            android: false
+          - os: windows-latest  # windows x64 + arm64
+            android: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter (provides Dart)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install build_tool dependencies
+        working-directory: cargokit/build_tool
+        run: dart pub get
+
+      - name: Precompile (desktop + iOS)
+        if: ${{ !matrix.android }}
+        working-directory: cargokit/build_tool
+        env:
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          dart run build_tool precompile-binaries -v
+          --manifest-dir=../../rust
+          --repository=icodejoo/ffuzzy
+
+      - name: Precompile (linux + Android)
+        if: ${{ matrix.android }}
+        working-directory: cargokit/build_tool
+        env:
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          dart run build_tool precompile-binaries -v
+          --manifest-dir=../../rust
+          --repository=icodejoo/ffuzzy
+          --android-sdk-location=$ANDROID_SDK_ROOT
+          --android-ndk-version=28.2.13676358
+          --android-min-sdk-version=21

@@ -1,0 +1,17 @@
+# 预编译二进制(Precompiled binaries)
+#
+# 使用者构建 App 时,cargokit 会按 `<url_prefix><crate-hash>/<target>_<lib>` 的地址
+# 从本仓库的 GitHub Release 下载已签名的原生库,并用下面的 public_key 验签。
+# 验签通过即直接使用,**不再调用 cargo,使用者无需安装 Rust 工具链**。
+#
+# 这些二进制由 .github/workflows/precompile_binaries.yml 在 CI 上编译、用配对的
+# 私钥签名后上传(私钥保存在仓库 Secret `PRIVATE_KEY`,绝不入库)。
+#
+# 注意:crate-hash 由 rust/ 目录内容决定。每次改动 rust/ 源码或依赖后,
+# 必须重新跑一次 precompile 工作流生成新哈希对应的二进制,然后才发布到 pub.dev。
+#
+# 想强制从源码编译(本地开发/调试)时,在 app 的对应平台目录放 cargokit_options.yaml:
+#   use_precompiled_binaries: false
+precompiled_binaries:
+  url_prefix: "https://github.com/icodejoo/ffuzzy/releases/download/precompiled_"
+  public_key: "96cfa1f593d459d7e61e3e53cc5eb2fb03e6eb8ce8469de7e978265925edfa38"

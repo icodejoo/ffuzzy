@@ -80,9 +80,26 @@ cd example && flutter run -d <device>         # 跑演示 App
 
 ## 发布到 pub.dev
 
-`flutter pub publish --dry-run` 现已 **0 warnings**(已采用自包含单包结构)。发布前仅剩:
-- 把 `pubspec.yaml` 的 `repository` 占位改成真实仓库地址。
-- 建议先在 Android 真机/各桌面平台跑通 `example` 构建(首次经 cargokit 交叉编译 Rust)。
+`flutter pub publish --dry-run` 现已 **0 warnings**(已采用自包含单包结构)。仓库已推送到
+`github.com/icodejoo/ffuzzy`(`repository`/`homepage` 已是真实地址)。
+
+## 预编译二进制(让使用者免装 Rust)
+
+机制:`rust/cargokit.yaml` 声明 `precompiled_binaries: {url_prefix, public_key}`。使用者构建时
+cargokit 按 `<url_prefix><crate-hash>/<target>_<lib>` 从 GitHub Release 下载已签名二进制并验签,
+成功则跳过 cargo 编译 → **无需 Rust 工具链**。crate-hash 由 `rust/` 内容决定。
+
+- **签名密钥**:`cargokit/build_tool` 里 `dart run build_tool gen-key`。公钥写进 `rust/cargokit.yaml`;
+  私钥存仓库 Secret `PRIVATE_KEY`(本地 `precompiled_signing_key.PRIVATE.txt` 已 gitignore,绝不入库)。
+- **CI**:`.github/workflows/precompile_binaries.yml`(手动触发,串行 matrix)。ubuntu 编 linux+Android,
+  macos 编 macOS+iOS,windows 编 win x64+arm64;用 `precompile-binaries --manifest-dir=../../rust
+  --repository=icodejoo/ffuzzy`,创建 tag `precompiled_<hash>` 的 Release 上传二进制+`.sig`。
+- **发布顺序**:① 定稿 `rust/` → ② 跑 precompile 工作流(等 Release 产出)→ ③ `verify-binaries` 校验 →
+  ④ `flutter pub publish`。**改了 `rust/` 必须重跑 ② 再发**,否则使用者哈希对不上会退回源码编译。
+- **验证**:`dart run build_tool verify-binaries --manifest-dir=../../rust`(检查各 target 是否有已签名资产)。
+- 使用者想强制源码编译:在 app 平台目录放 `cargokit_options.yaml` → `use_precompiled_binaries: false`。
+
+发布前建议先在 Android 真机/各桌面平台跑通 `example` 构建(首次经 cargokit 交叉编译 Rust)。
 
 ## 体积(打进 App 的原生库,release + size profile)
 

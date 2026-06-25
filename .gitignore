@@ -34,3 +34,6 @@ migrate_working_dir/
 
 # 便携 bundle,不入库
 ffuzzy.bundle
+
+# 预编译二进制的签名私钥,绝不入库(放入 GitHub Secret PRIVATE_KEY)
+precompiled_signing_key.PRIVATE.txt
