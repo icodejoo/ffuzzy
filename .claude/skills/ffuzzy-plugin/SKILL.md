@@ -129,6 +129,26 @@ cd example && flutter run -d <device>            # 或 flutter build windows --r
 `flutter pub publish --dry-run` 现已 **0 warnings**(已采用自包含单包结构)。仓库已推送到
 `github.com/icodejoo/ffuzzy`(`repository`/`homepage` 已是真实地址)。
 
+- **pubspec SDK 下限别低于 3.3.0**:`lib/src/rust/frb_generated.web.dart` 用了 `extension type`(inline-class,
+  需 Dart ≥3.3.0)。下限设到 3.0.0 会让 `dart analyze` 在 dry-run 里报 `undefined_class RustLibWasmModule` +
+  `experiment_not_enabled` 直接 fail。当前 `sdk: ">=3.3.0 <4.0.0"`。
+- **Android `compileSdk` 坑(0.1.2 修)**:Flutter 插件模板默认 `android/build.gradle` 的 `compileSdkVersion 33`,
+  在新版 Flutter(3.44+)+ 新 androidx 传递依赖下,使用者 Android release 构建会在 `:ffuzzy:checkReleaseAarMetadata`
+  报 "requires compileSdk >= 34" 失败。已提到 **35**(真机 arm64 验证通过)。该文件**不在 `rust/` 内 → 不影响 crate-hash**,
+  改它只需发新版本号,不必重跑预编译 CI。
+
+### 真实流程验证(在第三方 app 里测,已跑通)
+模拟「普通用户(无 Rust)」拿预编译包:本机装了 rustup 时 cargokit **默认本地编译**(见 `options.dart`
+`defaultUsePrecompiledBinaries() => Rustup.executablePath()==null`),要强制走下载+验签,在 app 根目录放
+`cargokit_options.yaml` → `use_precompiled_binaries: true`(+`verbose_logging: true` 看日志)。
+- 单独验证原生库获取(免 VS/NDK 全量构建):直接驱动 cargokit `build-cmake`,喂 `CARGOKIT_CONFIGURATION=release`、
+  `CARGOKIT_TARGET_PLATFORM`、`CARGOKIT_{MANIFEST,OUTPUT,TARGET_TEMP}_DIR`、`CARGOKIT_ROOT_PROJECT_DIR`(放上面的
+  options 文件),manifest 指向 pub cache 里 `ffuzzy-<ver>/rust`。成功会下载 `<target>_<lib>` + `.sig` 验签后落到 OUTPUT_DIR。
+  注:**不能在 pub cache 目录里 `dart run`**(Cannot operate on packages inside the cache),用仓库内的 `cargokit/build_tool` 跑。
+- 真机整链:`flutter build apk --release --target-platform android-arm64` → 日志出现 `Found precompiled artifacts for
+  aarch64-linux-android`(无 cargo 编译)→ `flutter install` + `adb shell am start` → logcat 看到自打的 smoke 行即通。
+  release 模式 `debugPrint` 仍进 logcat(tag `flutter`)。
+
 ## 预编译二进制(让使用者免装 Rust)
 
 机制:`rust/cargokit.yaml` 声明 `precompiled_binaries: {url_prefix, public_key}`。使用者构建时

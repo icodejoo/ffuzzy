@@ -6,132 +6,108 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `build_haystacks`, `case_matching`, `make_matcher`, `make_pattern`, `normalization`, `rank_and_truncate`
+// These functions are ignored because they are not marked as `pub`: `build_folded`, `build_haystacks`, `case_matching`, `filter_nonfuzzy`, `fold_pair`, `fuzzy_rank_haystacks`, `fuzzy_rank_items`, `indices_one`, `make_matcher`, `make_pattern`, `nonfuzzy_filter`, `nonfuzzy_match_indices`, `normalization`, `rank_scored`, `scan_one`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `Scored`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `eq`, `fmt`
 
 /// 便捷构造默认配置，供 Dart 侧直接调用。
 FuzzyConfig defaultFuzzyConfig() =>
     RustLib.instance.api.crateApiFuzzyDefaultFuzzyConfig();
 
-/// 对单个字符串打分；不匹配返回 `None`（Dart 侧为 `int?`）。
-int? fuzzyMatch({
-  required String query,
-  required String haystack,
-  required FuzzyConfig config,
-}) => RustLib.instance.api.crateApiFuzzyFuzzyMatch(
-  query: query,
-  haystack: haystack,
-  config: config,
-);
+/// 对单个字符串打分；不匹配返回 `None`。简单/子序列模式命中返回 `Some(0)`。
+int? fuzzyMatch(
+        {required String query,
+        required String haystack,
+        required FuzzyConfig config}) =>
+    RustLib.instance.api.crateApiFuzzyFuzzyMatch(
+        query: query, haystack: haystack, config: config);
 
 /// 对单个字符串打分并返回命中字符下标；不匹配返回 `None`。
-FuzzyMatch? fuzzyMatchIndices({
-  required String query,
-  required String haystack,
-  required FuzzyConfig config,
-}) => RustLib.instance.api.crateApiFuzzyFuzzyMatchIndices(
-  query: query,
-  haystack: haystack,
-  config: config,
-);
+FuzzyMatch? fuzzyMatchIndices(
+        {required String query,
+        required String haystack,
+        required FuzzyConfig config}) =>
+    RustLib.instance.api.crateApiFuzzyFuzzyMatchIndices(
+        query: query, haystack: haystack, config: config);
 
-/// 对列表做模糊筛选，按分数降序（同分保持原顺序）返回命中项；
-/// `limit` 为可选的结果数量上限（Dart 侧为 `int?`）。
-List<FuzzyHit> fuzzyFilter({
-  required String query,
-  required List<String> items,
-  required FuzzyConfig config,
-  int? limit,
-}) => RustLib.instance.api.crateApiFuzzyFuzzyFilter(
-  query: query,
-  items: items,
-  config: config,
-  limit: limit,
-);
+/// 对列表做筛选。`Fuzzy` 按分数降序，其余按原序（命中满 `limit` 即停）。
+List<FuzzyHit> fuzzyFilter(
+        {required String query,
+        required List<String> items,
+        required FuzzyConfig config,
+        int? limit}) =>
+    RustLib.instance.api.crateApiFuzzyFuzzyFilter(
+        query: query, items: items, config: config, limit: limit);
 
-/// 异步版本：不标记 `#[frb(sync)]`，frb 会在独立 worker 线程上执行，**不阻塞 Dart UI 线程**。
-/// 适合超大数据集或不希望卡顿的场景（Dart 侧返回 `Future<List<FuzzyHit>>`）。
-/// 比 Dart 的 `compute` 更省：无需把数据拷进新 isolate，直接在 Rust 线程算。
-Future<List<FuzzyHit>> fuzzyFilterAsync({
-  required String query,
-  required List<String> items,
-  required FuzzyConfig config,
-  int? limit,
-}) => RustLib.instance.api.crateApiFuzzyFuzzyFilterAsync(
-  query: query,
-  items: items,
-  config: config,
-  limit: limit,
-);
+/// 异步版本：在 frb worker 线程执行，不阻塞 Dart UI 线程。
+Future<List<FuzzyHit>> fuzzyFilterAsync(
+        {required String query,
+        required List<String> items,
+        required FuzzyConfig config,
+        int? limit}) =>
+    RustLib.instance.api.crateApiFuzzyFuzzyFilterAsync(
+        query: query, items: items, config: config, limit: limit);
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FuzzyCorpus>>
 abstract class FuzzyCorpus implements RustOpaqueInterface {
-  /// 增量追加候选项到末尾(不重建索引)。已驻留则同步追加 Utf32 索引;
-  /// 未驻留(已 free)只追加源,下次 rehydrate 一并生效。O(追加量)。
+  /// 末尾追加（不重建）。同步维护 Utf32 索引与折叠副本。
   void add({required List<String> items});
 
-  /// 清空全部候选(保留实例与驻留状态)。
+  /// 清空全部候选（保留实例与驻留状态）。
   void clear();
 
-  /// 仅传入查询串即可过滤已缓存的语料，按分数降序（同分保持原序）返回命中项。
-  /// 若已 `free`，则从源字符串临时转换匹配（仍无需跨 FFI 重传列表）。
-  List<FuzzyHit> filter({
-    required String query,
-    required FuzzyConfig config,
-    int? limit,
-  });
+  /// 过滤已缓存的语料。`Fuzzy` 按分数降序；其余按原序。
+  List<FuzzyHit> filter(
+      {required String query, required FuzzyConfig config, int? limit});
 
-  /// `filter` 的异步版本：在 frb worker 线程执行，不阻塞 UI（Dart 侧返回 `Future`）。
-  /// 语料仍常驻 Rust 侧，调用只跨 FFI 传查询串。
-  Future<List<FuzzyHit>> filterAsync({
-    required String query,
-    required FuzzyConfig config,
-    int? limit,
-  });
+  /// `filter` 的异步版本：frb worker 线程执行，不阻塞 UI。
+  Future<List<FuzzyHit>> filterAsync(
+      {required String query, required FuzzyConfig config, int? limit});
 
-  /// 释放占内存大头的 Utf32 索引，但**保留实例与源字符串**，便于低成本 `rehydrate`。
-  /// free 后内存回落到约「源字符串」大小（ASCII 下约为驻留态的 1/5）。
-  /// 幂等。free 状态下 `filter` 仍可用（每次从源临时转换，较慢，但无需跨 FFI 重传列表）。
+  /// 释放占内存大头的 Utf32 索引（与折叠副本），保留源字符串便于 `rehydrate`。幂等。
   void free();
 
-  /// 是否为空。
   bool isEmpty();
 
-  /// 是否已驻留 Utf32 索引（free 后为 false）。
   bool isHydrated();
 
-  /// 当前语料条目数。
   int len();
 
-  /// 用一组候选项构建语料（一次性，类似建索引）。
-  factory FuzzyCorpus({required List<String> items}) =>
-      RustLib.instance.api.crateApiFuzzyFuzzyCorpusNew(items: items);
+  /// 用一组候选项构建语料。`ignore_case_indices=true` 时额外常驻一份折叠副本。
+  factory FuzzyCorpus(
+          {required List<String> items, required bool ignoreCaseIndices}) =>
+      RustLib.instance.api.crateApiFuzzyFuzzyCorpusNew(
+          items: items, ignoreCaseIndices: ignoreCaseIndices);
 
-  /// 从驻留的源字符串重建 Utf32 索引，恢复快速搜索。**无跨 FFI 编组开销**（源已在 Rust 侧）。
-  /// 已驻留时为空操作。
+  /// 从源字符串重建 Utf32 索引（及折叠副本，若启用）。无跨 FFI 编组开销。幂等。
   void rehydrate();
 
-  /// 批量按下标删除(内部降序去重删除,避免位移错乱)。
+  /// 批量按下标删除（内部降序去重）。
   void removeIndices({required List<int> indices});
 
-  /// 替换指定下标的候选(越界忽略)。O(1)。
+  /// 替换指定下标（越界忽略）。
   void setAt({required int index, required String item});
 }
 
-/// 模糊匹配配置。
+/// 模糊匹配配置。`ignore_case` 按查询传，其余仅 `Fuzzy` 相关。
 class FuzzyConfig {
-  /// 忽略大小写。true => `CaseMatching::Ignore`，false => `CaseMatching::Respect`。
+  /// 忽略大小写。
   final bool ignoreCase;
 
-  /// Unicode 归一化（影响带变音符号字符的匹配）。true => `Normalization::Smart`，false => `Never`。
+  /// Unicode 归一化（仅 `Fuzzy` 生效；简单模式忽略）。
   final bool normalize;
 
-  /// 是否给「以查询开头」的结果额外加分，使前缀匹配排名更靠前。
+  /// 前缀优先（仅 `Fuzzy` 的排序生效）。
   final bool preferPrefix;
+
+  /// 匹配模式。
+  final MatchMode mode;
 
   const FuzzyConfig({
     required this.ignoreCase,
     required this.normalize,
     required this.preferPrefix,
+    required this.mode,
   });
 
   static Future<FuzzyConfig> default_() =>
@@ -139,7 +115,10 @@ class FuzzyConfig {
 
   @override
   int get hashCode =>
-      ignoreCase.hashCode ^ normalize.hashCode ^ preferPrefix.hashCode;
+      ignoreCase.hashCode ^
+      normalize.hashCode ^
+      preferPrefix.hashCode ^
+      mode.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -148,7 +127,8 @@ class FuzzyConfig {
           runtimeType == other.runtimeType &&
           ignoreCase == other.ignoreCase &&
           normalize == other.normalize &&
-          preferPrefix == other.preferPrefix;
+          preferPrefix == other.preferPrefix &&
+          mode == other.mode;
 }
 
 /// 列表筛选命中项：`index` 指回原列表，`score` 为匹配分，`indices` 为命中字符下标。
@@ -181,7 +161,10 @@ class FuzzyMatch {
   final int score;
   final Uint32List indices;
 
-  const FuzzyMatch({required this.score, required this.indices});
+  const FuzzyMatch({
+    required this.score,
+    required this.indices,
+  });
 
   @override
   int get hashCode => score.hashCode ^ indices.hashCode;
@@ -193,4 +176,20 @@ class FuzzyMatch {
           runtimeType == other.runtimeType &&
           score == other.score &&
           indices == other.indices;
+}
+
+/// 匹配模式。
+enum MatchMode {
+  /// nucleo 子序列模糊匹配 + 打分 + 排序（默认）。
+  fuzzy,
+
+  /// 精确子串：`haystack` 包含 `query`。
+  substring,
+
+  /// 前缀：`haystack` 以 `query` 开头。
+  prefix,
+
+  /// 全词：`haystack` 与 `query` 完全相等。
+  word,
+  ;
 }

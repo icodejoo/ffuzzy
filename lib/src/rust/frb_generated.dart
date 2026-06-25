@@ -36,8 +36,12 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 
   /// Initialize flutter_rust_bridge in mock mode.
   /// No libraries for FFI are loaded.
-  static void initMock({required RustLibApi api}) {
-    instance.initMockImpl(api: api);
+  static void initMock({
+    required RustLibApi api,
+  }) {
+    instance.initMockImpl(
+      api: api,
+    );
   }
 
   /// Dispose flutter_rust_bridge
@@ -71,34 +75,30 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
-        stem: 'rust_lib_ffuzzy',
-        ioDirectory: 'rust/target/release/',
-        webPrefix: 'pkg/',
-        wasmBindgenName: 'wasm_bindgen',
-      );
+    stem: 'rust_lib_ffuzzy',
+    ioDirectory: 'rust/target/release/',
+    webPrefix: 'pkg/',
+    wasmBindgenName: 'wasm_bindgen',
+  );
 }
 
 abstract class RustLibApi extends BaseApi {
-  void crateApiFuzzyFuzzyCorpusAdd({
-    required FuzzyCorpus that,
-    required List<String> items,
-  });
+  void crateApiFuzzyFuzzyCorpusAdd(
+      {required FuzzyCorpus that, required List<String> items});
 
   void crateApiFuzzyFuzzyCorpusClear({required FuzzyCorpus that});
 
-  List<FuzzyHit> crateApiFuzzyFuzzyCorpusFilter({
-    required FuzzyCorpus that,
-    required String query,
-    required FuzzyConfig config,
-    int? limit,
-  });
+  List<FuzzyHit> crateApiFuzzyFuzzyCorpusFilter(
+      {required FuzzyCorpus that,
+      required String query,
+      required FuzzyConfig config,
+      int? limit});
 
-  Future<List<FuzzyHit>> crateApiFuzzyFuzzyCorpusFilterAsync({
-    required FuzzyCorpus that,
-    required String query,
-    required FuzzyConfig config,
-    int? limit,
-  });
+  Future<List<FuzzyHit>> crateApiFuzzyFuzzyCorpusFilterAsync(
+      {required FuzzyCorpus that,
+      required String query,
+      required FuzzyConfig config,
+      int? limit});
 
   void crateApiFuzzyFuzzyCorpusFree({required FuzzyCorpus that});
 
@@ -108,60 +108,52 @@ abstract class RustLibApi extends BaseApi {
 
   int crateApiFuzzyFuzzyCorpusLen({required FuzzyCorpus that});
 
-  FuzzyCorpus crateApiFuzzyFuzzyCorpusNew({required List<String> items});
+  FuzzyCorpus crateApiFuzzyFuzzyCorpusNew(
+      {required List<String> items, required bool ignoreCaseIndices});
 
   void crateApiFuzzyFuzzyCorpusRehydrate({required FuzzyCorpus that});
 
-  void crateApiFuzzyFuzzyCorpusRemoveIndices({
-    required FuzzyCorpus that,
-    required List<int> indices,
-  });
+  void crateApiFuzzyFuzzyCorpusRemoveIndices(
+      {required FuzzyCorpus that, required List<int> indices});
 
-  void crateApiFuzzyFuzzyCorpusSetAt({
-    required FuzzyCorpus that,
-    required int index,
-    required String item,
-  });
+  void crateApiFuzzyFuzzyCorpusSetAt(
+      {required FuzzyCorpus that, required int index, required String item});
 
   FuzzyConfig crateApiFuzzyDefaultFuzzyConfig();
 
   Future<FuzzyConfig> crateApiFuzzyFuzzyConfigDefault();
 
-  List<FuzzyHit> crateApiFuzzyFuzzyFilter({
-    required String query,
-    required List<String> items,
-    required FuzzyConfig config,
-    int? limit,
-  });
+  List<FuzzyHit> crateApiFuzzyFuzzyFilter(
+      {required String query,
+      required List<String> items,
+      required FuzzyConfig config,
+      int? limit});
 
-  Future<List<FuzzyHit>> crateApiFuzzyFuzzyFilterAsync({
-    required String query,
-    required List<String> items,
-    required FuzzyConfig config,
-    int? limit,
-  });
+  Future<List<FuzzyHit>> crateApiFuzzyFuzzyFilterAsync(
+      {required String query,
+      required List<String> items,
+      required FuzzyConfig config,
+      int? limit});
 
-  int? crateApiFuzzyFuzzyMatch({
-    required String query,
-    required String haystack,
-    required FuzzyConfig config,
-  });
+  int? crateApiFuzzyFuzzyMatch(
+      {required String query,
+      required String haystack,
+      required FuzzyConfig config});
 
-  FuzzyMatch? crateApiFuzzyFuzzyMatchIndices({
-    required String query,
-    required String haystack,
-    required FuzzyConfig config,
-  });
+  FuzzyMatch? crateApiFuzzyFuzzyMatchIndices(
+      {required String query,
+      required String haystack,
+      required FuzzyConfig config});
 
   String crateApiSimpleGreet({required String name});
 
   Future<void> crateApiSimpleInitApp();
 
   RustArcIncrementStrongCountFnType
-  get rust_arc_increment_strong_count_FuzzyCorpus;
+      get rust_arc_increment_strong_count_FuzzyCorpus;
 
   RustArcDecrementStrongCountFnType
-  get rust_arc_decrement_strong_count_FuzzyCorpus;
+      get rust_arc_decrement_strong_count_FuzzyCorpus;
 
   CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_FuzzyCorpusPtr;
 }
@@ -175,30 +167,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
-  void crateApiFuzzyFuzzyCorpusAdd({
-    required FuzzyCorpus that,
-    required List<String> items,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-            that,
-            serializer,
-          );
-          sse_encode_list_String(items, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 1)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyCorpusAddConstMeta,
-        argValues: [that, items],
-        apiImpl: this,
+  void crateApiFuzzyFuzzyCorpusAdd(
+      {required FuzzyCorpus that, required List<String> items}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+            that, serializer);
+        sse_encode_list_String(items, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 1)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyCorpusAddConstMeta,
+      argValues: [that, items],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyCorpusAddConstMeta =>
@@ -209,59 +195,53 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   void crateApiFuzzyFuzzyCorpusClear({required FuzzyCorpus that}) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-            that,
-            serializer,
-          );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 2)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyCorpusClearConstMeta,
-        argValues: [that],
-        apiImpl: this,
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 2)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyCorpusClearConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyCorpusClearConstMeta =>
-      const TaskConstMeta(debugName: "FuzzyCorpus_clear", argNames: ["that"]);
+      const TaskConstMeta(
+        debugName: "FuzzyCorpus_clear",
+        argNames: ["that"],
+      );
 
   @override
-  List<FuzzyHit> crateApiFuzzyFuzzyCorpusFilter({
-    required FuzzyCorpus that,
-    required String query,
-    required FuzzyConfig config,
-    int? limit,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-            that,
-            serializer,
-          );
-          sse_encode_String(query, serializer);
-          sse_encode_box_autoadd_fuzzy_config(config, serializer);
-          sse_encode_opt_box_autoadd_u_32(limit, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 3)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_fuzzy_hit,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyCorpusFilterConstMeta,
-        argValues: [that, query, config, limit],
-        apiImpl: this,
+  List<FuzzyHit> crateApiFuzzyFuzzyCorpusFilter(
+      {required FuzzyCorpus that,
+      required String query,
+      required FuzzyConfig config,
+      int? limit}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+            that, serializer);
+        sse_encode_String(query, serializer);
+        sse_encode_box_autoadd_fuzzy_config(config, serializer);
+        sse_encode_opt_box_autoadd_u_32(limit, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 3)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_fuzzy_hit,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyCorpusFilterConstMeta,
+      argValues: [that, query, config, limit],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyCorpusFilterConstMeta =>
@@ -271,39 +251,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<List<FuzzyHit>> crateApiFuzzyFuzzyCorpusFilterAsync({
-    required FuzzyCorpus that,
-    required String query,
-    required FuzzyConfig config,
-    int? limit,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-            that,
-            serializer,
-          );
-          sse_encode_String(query, serializer);
-          sse_encode_box_autoadd_fuzzy_config(config, serializer);
-          sse_encode_opt_box_autoadd_u_32(limit, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 4,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_fuzzy_hit,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyCorpusFilterAsyncConstMeta,
-        argValues: [that, query, config, limit],
-        apiImpl: this,
+  Future<List<FuzzyHit>> crateApiFuzzyFuzzyCorpusFilterAsync(
+      {required FuzzyCorpus that,
+      required String query,
+      required FuzzyConfig config,
+      int? limit}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+            that, serializer);
+        sse_encode_String(query, serializer);
+        sse_encode_box_autoadd_fuzzy_config(config, serializer);
+        sse_encode_opt_box_autoadd_u_32(limit, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 4, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_fuzzy_hit,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyCorpusFilterAsyncConstMeta,
+      argValues: [that, query, config, limit],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyCorpusFilterAsyncConstMeta =>
@@ -314,51 +285,46 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   void crateApiFuzzyFuzzyCorpusFree({required FuzzyCorpus that}) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-            that,
-            serializer,
-          );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyCorpusFreeConstMeta,
-        argValues: [that],
-        apiImpl: this,
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyCorpusFreeConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyCorpusFreeConstMeta =>
-      const TaskConstMeta(debugName: "FuzzyCorpus_free", argNames: ["that"]);
+      const TaskConstMeta(
+        debugName: "FuzzyCorpus_free",
+        argNames: ["that"],
+      );
 
   @override
   bool crateApiFuzzyFuzzyCorpusIsEmpty({required FuzzyCorpus that}) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-            that,
-            serializer,
-          );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 6)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_bool,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyCorpusIsEmptyConstMeta,
-        argValues: [that],
-        apiImpl: this,
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 6)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_bool,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyCorpusIsEmptyConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyCorpusIsEmptyConstMeta =>
@@ -369,25 +335,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   bool crateApiFuzzyFuzzyCorpusIsHydrated({required FuzzyCorpus that}) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-            that,
-            serializer,
-          );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_bool,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyCorpusIsHydratedConstMeta,
-        argValues: [that],
-        apiImpl: this,
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_bool,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyCorpusIsHydratedConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyCorpusIsHydratedConstMeta =>
@@ -398,75 +360,73 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   int crateApiFuzzyFuzzyCorpusLen({required FuzzyCorpus that}) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-            that,
-            serializer,
-          );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 8)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_u_32,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyCorpusLenConstMeta,
-        argValues: [that],
-        apiImpl: this,
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 8)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_u_32,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyCorpusLenConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyCorpusLenConstMeta =>
-      const TaskConstMeta(debugName: "FuzzyCorpus_len", argNames: ["that"]);
+      const TaskConstMeta(
+        debugName: "FuzzyCorpus_len",
+        argNames: ["that"],
+      );
 
   @override
-  FuzzyCorpus crateApiFuzzyFuzzyCorpusNew({required List<String> items}) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_list_String(items, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData:
-              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyCorpusNewConstMeta,
-        argValues: [items],
-        apiImpl: this,
+  FuzzyCorpus crateApiFuzzyFuzzyCorpusNew(
+      {required List<String> items, required bool ignoreCaseIndices}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_String(items, serializer);
+        sse_encode_bool(ignoreCaseIndices, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData:
+            sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyCorpusNewConstMeta,
+      argValues: [items, ignoreCaseIndices],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyCorpusNewConstMeta =>
-      const TaskConstMeta(debugName: "FuzzyCorpus_new", argNames: ["items"]);
+      const TaskConstMeta(
+        debugName: "FuzzyCorpus_new",
+        argNames: ["items", "ignoreCaseIndices"],
+      );
 
   @override
   void crateApiFuzzyFuzzyCorpusRehydrate({required FuzzyCorpus that}) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-            that,
-            serializer,
-          );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 10)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyCorpusRehydrateConstMeta,
-        argValues: [that],
-        apiImpl: this,
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 10)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyCorpusRehydrateConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyCorpusRehydrateConstMeta =>
@@ -476,30 +436,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  void crateApiFuzzyFuzzyCorpusRemoveIndices({
-    required FuzzyCorpus that,
-    required List<int> indices,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-            that,
-            serializer,
-          );
-          sse_encode_list_prim_u_32_loose(indices, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyCorpusRemoveIndicesConstMeta,
-        argValues: [that, indices],
-        apiImpl: this,
+  void crateApiFuzzyFuzzyCorpusRemoveIndices(
+      {required FuzzyCorpus that, required List<int> indices}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+            that, serializer);
+        sse_encode_list_prim_u_32_loose(indices, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyCorpusRemoveIndicesConstMeta,
+      argValues: [that, indices],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyCorpusRemoveIndicesConstMeta =>
@@ -509,32 +463,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  void crateApiFuzzyFuzzyCorpusSetAt({
-    required FuzzyCorpus that,
-    required int index,
-    required String item,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-            that,
-            serializer,
-          );
-          sse_encode_u_32(index, serializer);
-          sse_encode_String(item, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyCorpusSetAtConstMeta,
-        argValues: [that, index, item],
-        apiImpl: this,
+  void crateApiFuzzyFuzzyCorpusSetAt(
+      {required FuzzyCorpus that, required int index, required String item}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+            that, serializer);
+        sse_encode_u_32(index, serializer);
+        sse_encode_String(item, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyCorpusSetAtConstMeta,
+      argValues: [that, index, item],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyCorpusSetAtConstMeta =>
@@ -545,117 +492,105 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   FuzzyConfig crateApiFuzzyDefaultFuzzyConfig() {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_fuzzy_config,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyDefaultFuzzyConfigConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_fuzzy_config,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyDefaultFuzzyConfigConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyDefaultFuzzyConfigConstMeta =>
-      const TaskConstMeta(debugName: "default_fuzzy_config", argNames: []);
+      const TaskConstMeta(
+        debugName: "default_fuzzy_config",
+        argNames: [],
+      );
 
   @override
   Future<FuzzyConfig> crateApiFuzzyFuzzyConfigDefault() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 14,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_fuzzy_config,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyConfigDefaultConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 14, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_fuzzy_config,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyConfigDefaultConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyConfigDefaultConstMeta =>
-      const TaskConstMeta(debugName: "fuzzy_config_default", argNames: []);
+      const TaskConstMeta(
+        debugName: "fuzzy_config_default",
+        argNames: [],
+      );
 
   @override
-  List<FuzzyHit> crateApiFuzzyFuzzyFilter({
-    required String query,
-    required List<String> items,
-    required FuzzyConfig config,
-    int? limit,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(query, serializer);
-          sse_encode_list_String(items, serializer);
-          sse_encode_box_autoadd_fuzzy_config(config, serializer);
-          sse_encode_opt_box_autoadd_u_32(limit, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 15)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_fuzzy_hit,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyFilterConstMeta,
-        argValues: [query, items, config, limit],
-        apiImpl: this,
+  List<FuzzyHit> crateApiFuzzyFuzzyFilter(
+      {required String query,
+      required List<String> items,
+      required FuzzyConfig config,
+      int? limit}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(query, serializer);
+        sse_encode_list_String(items, serializer);
+        sse_encode_box_autoadd_fuzzy_config(config, serializer);
+        sse_encode_opt_box_autoadd_u_32(limit, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 15)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_fuzzy_hit,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyFilterConstMeta,
+      argValues: [query, items, config, limit],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyFilterConstMeta => const TaskConstMeta(
-    debugName: "fuzzy_filter",
-    argNames: ["query", "items", "config", "limit"],
-  );
+        debugName: "fuzzy_filter",
+        argNames: ["query", "items", "config", "limit"],
+      );
 
   @override
-  Future<List<FuzzyHit>> crateApiFuzzyFuzzyFilterAsync({
-    required String query,
-    required List<String> items,
-    required FuzzyConfig config,
-    int? limit,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(query, serializer);
-          sse_encode_list_String(items, serializer);
-          sse_encode_box_autoadd_fuzzy_config(config, serializer);
-          sse_encode_opt_box_autoadd_u_32(limit, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 16,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_fuzzy_hit,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyFilterAsyncConstMeta,
-        argValues: [query, items, config, limit],
-        apiImpl: this,
+  Future<List<FuzzyHit>> crateApiFuzzyFuzzyFilterAsync(
+      {required String query,
+      required List<String> items,
+      required FuzzyConfig config,
+      int? limit}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(query, serializer);
+        sse_encode_list_String(items, serializer);
+        sse_encode_box_autoadd_fuzzy_config(config, serializer);
+        sse_encode_opt_box_autoadd_u_32(limit, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 16, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_fuzzy_hit,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyFilterAsyncConstMeta,
+      argValues: [query, items, config, limit],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyFilterAsyncConstMeta =>
@@ -665,60 +600,54 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  int? crateApiFuzzyFuzzyMatch({
-    required String query,
-    required String haystack,
-    required FuzzyConfig config,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(query, serializer);
-          sse_encode_String(haystack, serializer);
-          sse_encode_box_autoadd_fuzzy_config(config, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_opt_box_autoadd_u_32,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyMatchConstMeta,
-        argValues: [query, haystack, config],
-        apiImpl: this,
+  int? crateApiFuzzyFuzzyMatch(
+      {required String query,
+      required String haystack,
+      required FuzzyConfig config}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(query, serializer);
+        sse_encode_String(haystack, serializer);
+        sse_encode_box_autoadd_fuzzy_config(config, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_opt_box_autoadd_u_32,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyMatchConstMeta,
+      argValues: [query, haystack, config],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyMatchConstMeta => const TaskConstMeta(
-    debugName: "fuzzy_match",
-    argNames: ["query", "haystack", "config"],
-  );
+        debugName: "fuzzy_match",
+        argNames: ["query", "haystack", "config"],
+      );
 
   @override
-  FuzzyMatch? crateApiFuzzyFuzzyMatchIndices({
-    required String query,
-    required String haystack,
-    required FuzzyConfig config,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(query, serializer);
-          sse_encode_String(haystack, serializer);
-          sse_encode_box_autoadd_fuzzy_config(config, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_opt_box_autoadd_fuzzy_match,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFuzzyFuzzyMatchIndicesConstMeta,
-        argValues: [query, haystack, config],
-        apiImpl: this,
+  FuzzyMatch? crateApiFuzzyFuzzyMatchIndices(
+      {required String query,
+      required String haystack,
+      required FuzzyConfig config}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(query, serializer);
+        sse_encode_String(haystack, serializer);
+        sse_encode_box_autoadd_fuzzy_config(config, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_opt_box_autoadd_fuzzy_match,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiFuzzyFuzzyMatchIndicesConstMeta,
+      argValues: [query, haystack, config],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiFuzzyFuzzyMatchIndicesConstMeta =>
@@ -729,94 +658,86 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   String crateApiSimpleGreet({required String name}) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_String,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSimpleGreetConstMeta,
-        argValues: [name],
-        apiImpl: this,
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(name, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiSimpleGreetConstMeta,
+      argValues: [name],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiSimpleGreetConstMeta =>
-      const TaskConstMeta(debugName: "greet", argNames: ["name"]);
+  TaskConstMeta get kCrateApiSimpleGreetConstMeta => const TaskConstMeta(
+        debugName: "greet",
+        argNames: ["name"],
+      );
 
   @override
   Future<void> crateApiSimpleInitApp() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 20,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSimpleInitAppConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 20, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiSimpleInitAppConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiSimpleInitAppConstMeta =>
-      const TaskConstMeta(debugName: "init_app", argNames: []);
+  TaskConstMeta get kCrateApiSimpleInitAppConstMeta => const TaskConstMeta(
+        debugName: "init_app",
+        argNames: [],
+      );
 
   RustArcIncrementStrongCountFnType
-  get rust_arc_increment_strong_count_FuzzyCorpus => wire
-      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus;
+      get rust_arc_increment_strong_count_FuzzyCorpus => wire
+          .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus;
 
   RustArcDecrementStrongCountFnType
-  get rust_arc_decrement_strong_count_FuzzyCorpus => wire
-      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus;
+      get rust_arc_decrement_strong_count_FuzzyCorpus => wire
+          .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus;
 
   @protected
   FuzzyCorpus
-  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-    dynamic raw,
-  ) {
+      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+          dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return FuzzyCorpusImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
   FuzzyCorpus
-  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-    dynamic raw,
-  ) {
+      dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+          dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return FuzzyCorpusImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
   FuzzyCorpus
-  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-    dynamic raw,
-  ) {
+      dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+          dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return FuzzyCorpusImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
   FuzzyCorpus
-  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-    dynamic raw,
-  ) {
+      dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+          dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return FuzzyCorpusImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
@@ -855,12 +776,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   FuzzyConfig dco_decode_fuzzy_config(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return FuzzyConfig(
       ignoreCase: dco_decode_bool(arr[0]),
       normalize: dco_decode_bool(arr[1]),
       preferPrefix: dco_decode_bool(arr[2]),
+      mode: dco_decode_match_mode(arr[3]),
     );
   }
 
@@ -887,6 +809,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       score: dco_decode_u_32(arr[0]),
       indices: dco_decode_list_prim_u_32_strict(arr[1]),
     );
+  }
+
+  @protected
+  int dco_decode_i_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
   }
 
   @protected
@@ -917,6 +845,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
+  }
+
+  @protected
+  MatchMode dco_decode_match_mode(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return MatchMode.values[raw as int];
   }
 
   @protected
@@ -957,50 +891,38 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   FuzzyCorpus
-  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-    SseDeserializer deserializer,
-  ) {
+      sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+          SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return FuzzyCorpusImpl.frbInternalSseDecode(
-      sse_decode_usize(deserializer),
-      sse_decode_i_32(deserializer),
-    );
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
   }
 
   @protected
   FuzzyCorpus
-  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-    SseDeserializer deserializer,
-  ) {
+      sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+          SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return FuzzyCorpusImpl.frbInternalSseDecode(
-      sse_decode_usize(deserializer),
-      sse_decode_i_32(deserializer),
-    );
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
   }
 
   @protected
   FuzzyCorpus
-  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-    SseDeserializer deserializer,
-  ) {
+      sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+          SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return FuzzyCorpusImpl.frbInternalSseDecode(
-      sse_decode_usize(deserializer),
-      sse_decode_i_32(deserializer),
-    );
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
   }
 
   @protected
   FuzzyCorpus
-  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-    SseDeserializer deserializer,
-  ) {
+      sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+          SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return FuzzyCorpusImpl.frbInternalSseDecode(
-      sse_decode_usize(deserializer),
-      sse_decode_i_32(deserializer),
-    );
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
   }
 
   @protected
@@ -1018,8 +940,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   FuzzyConfig sse_decode_box_autoadd_fuzzy_config(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_fuzzy_config(deserializer));
   }
@@ -1042,11 +963,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_ignoreCase = sse_decode_bool(deserializer);
     var var_normalize = sse_decode_bool(deserializer);
     var var_preferPrefix = sse_decode_bool(deserializer);
+    var var_mode = sse_decode_match_mode(deserializer);
     return FuzzyConfig(
-      ignoreCase: var_ignoreCase,
-      normalize: var_normalize,
-      preferPrefix: var_preferPrefix,
-    );
+        ignoreCase: var_ignoreCase,
+        normalize: var_normalize,
+        preferPrefix: var_preferPrefix,
+        mode: var_mode);
   }
 
   @protected
@@ -1064,6 +986,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_score = sse_decode_u_32(deserializer);
     var var_indices = sse_decode_list_prim_u_32_strict(deserializer);
     return FuzzyMatch(score: var_score, indices: var_indices);
+  }
+
+  @protected
+  int sse_decode_i_32(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getInt32();
   }
 
   @protected
@@ -1112,9 +1040,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MatchMode sse_decode_match_mode(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return MatchMode.values[inner];
+  }
+
+  @protected
   FuzzyMatch? sse_decode_opt_box_autoadd_fuzzy_match(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
@@ -1159,61 +1093,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  int sse_decode_i_32(SseDeserializer deserializer) {
+  void
+      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+          FuzzyCorpus self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getInt32();
+    sse_encode_usize(
+        (self as FuzzyCorpusImpl).frbInternalSseEncode(move: true), serializer);
   }
 
   @protected
   void
-  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-    FuzzyCorpus self,
-    SseSerializer serializer,
-  ) {
+      sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+          FuzzyCorpus self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-      (self as FuzzyCorpusImpl).frbInternalSseEncode(move: true),
-      serializer,
-    );
+        (self as FuzzyCorpusImpl).frbInternalSseEncode(move: false),
+        serializer);
   }
 
   @protected
   void
-  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-    FuzzyCorpus self,
-    SseSerializer serializer,
-  ) {
+      sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+          FuzzyCorpus self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-      (self as FuzzyCorpusImpl).frbInternalSseEncode(move: false),
-      serializer,
-    );
+        (self as FuzzyCorpusImpl).frbInternalSseEncode(move: false),
+        serializer);
   }
 
   @protected
   void
-  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-    FuzzyCorpus self,
-    SseSerializer serializer,
-  ) {
+      sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
+          FuzzyCorpus self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-      (self as FuzzyCorpusImpl).frbInternalSseEncode(move: false),
-      serializer,
-    );
-  }
-
-  @protected
-  void
-  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus(
-    FuzzyCorpus self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_usize(
-      (self as FuzzyCorpusImpl).frbInternalSseEncode(move: null),
-      serializer,
-    );
+        (self as FuzzyCorpusImpl).frbInternalSseEncode(move: null), serializer);
   }
 
   @protected
@@ -1230,18 +1144,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_box_autoadd_fuzzy_config(
-    FuzzyConfig self,
-    SseSerializer serializer,
-  ) {
+      FuzzyConfig self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_fuzzy_config(self, serializer);
   }
 
   @protected
   void sse_encode_box_autoadd_fuzzy_match(
-    FuzzyMatch self,
-    SseSerializer serializer,
-  ) {
+      FuzzyMatch self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_fuzzy_match(self, serializer);
   }
@@ -1258,6 +1168,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self.ignoreCase, serializer);
     sse_encode_bool(self.normalize, serializer);
     sse_encode_bool(self.preferPrefix, serializer);
+    sse_encode_match_mode(self.mode, serializer);
   }
 
   @protected
@@ -1276,6 +1187,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_i_32(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putInt32(self);
+  }
+
+  @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
@@ -1286,9 +1203,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_list_fuzzy_hit(
-    List<FuzzyHit> self,
-    SseSerializer serializer,
-  ) {
+      List<FuzzyHit> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
@@ -1298,21 +1213,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_list_prim_u_32_loose(
-    List<int> self,
-    SseSerializer serializer,
-  ) {
+      List<int> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
-    serializer.buffer.putUint32List(
-      self is Uint32List ? self : Uint32List.fromList(self),
-    );
+    serializer.buffer
+        .putUint32List(self is Uint32List ? self : Uint32List.fromList(self));
   }
 
   @protected
   void sse_encode_list_prim_u_32_strict(
-    Uint32List self,
-    SseSerializer serializer,
-  ) {
+      Uint32List self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint32List(self);
@@ -1320,19 +1230,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_list_prim_u_8_strict(
-    Uint8List self,
-    SseSerializer serializer,
-  ) {
+      Uint8List self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
   }
 
   @protected
+  void sse_encode_match_mode(MatchMode self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
   void sse_encode_opt_box_autoadd_fuzzy_match(
-    FuzzyMatch? self,
-    SseSerializer serializer,
-  ) {
+      FuzzyMatch? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     sse_encode_bool(self != null, serializer);
@@ -1373,23 +1285,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putBigUint64(self);
   }
-
-  @protected
-  void sse_encode_i_32(int self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putInt32(self);
-  }
 }
 
 @sealed
 class FuzzyCorpusImpl extends RustOpaque implements FuzzyCorpus {
   // Not to be used by end users
   FuzzyCorpusImpl.frbInternalDcoDecode(List<dynamic> wire)
-    : super.frbInternalDcoDecode(wire, _kStaticData);
+      : super.frbInternalDcoDecode(wire, _kStaticData);
 
   // Not to be used by end users
   FuzzyCorpusImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
-    : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+      : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
 
   static final _kStaticData = RustArcStaticData(
     rustArcIncrementStrongCount:
@@ -1400,67 +1306,54 @@ class FuzzyCorpusImpl extends RustOpaque implements FuzzyCorpus {
         RustLib.instance.api.rust_arc_decrement_strong_count_FuzzyCorpusPtr,
   );
 
-  /// 增量追加候选项到末尾(不重建索引)。已驻留则同步追加 Utf32 索引;
-  /// 未驻留(已 free)只追加源,下次 rehydrate 一并生效。O(追加量)。
+  /// 末尾追加（不重建）。同步维护 Utf32 索引与折叠副本。
   void add({required List<String> items}) => RustLib.instance.api
       .crateApiFuzzyFuzzyCorpusAdd(that: this, items: items);
 
-  /// 清空全部候选(保留实例与驻留状态)。
-  void clear() =>
-      RustLib.instance.api.crateApiFuzzyFuzzyCorpusClear(that: this);
+  /// 清空全部候选（保留实例与驻留状态）。
+  void clear() => RustLib.instance.api.crateApiFuzzyFuzzyCorpusClear(
+        that: this,
+      );
 
-  /// 仅传入查询串即可过滤已缓存的语料，按分数降序（同分保持原序）返回命中项。
-  /// 若已 `free`，则从源字符串临时转换匹配（仍无需跨 FFI 重传列表）。
-  List<FuzzyHit> filter({
-    required String query,
-    required FuzzyConfig config,
-    int? limit,
-  }) => RustLib.instance.api.crateApiFuzzyFuzzyCorpusFilter(
-    that: this,
-    query: query,
-    config: config,
-    limit: limit,
-  );
+  /// 过滤已缓存的语料。`Fuzzy` 按分数降序；其余按原序。
+  List<FuzzyHit> filter(
+          {required String query, required FuzzyConfig config, int? limit}) =>
+      RustLib.instance.api.crateApiFuzzyFuzzyCorpusFilter(
+          that: this, query: query, config: config, limit: limit);
 
-  /// `filter` 的异步版本：在 frb worker 线程执行，不阻塞 UI（Dart 侧返回 `Future`）。
-  /// 语料仍常驻 Rust 侧，调用只跨 FFI 传查询串。
-  Future<List<FuzzyHit>> filterAsync({
-    required String query,
-    required FuzzyConfig config,
-    int? limit,
-  }) => RustLib.instance.api.crateApiFuzzyFuzzyCorpusFilterAsync(
-    that: this,
-    query: query,
-    config: config,
-    limit: limit,
-  );
+  /// `filter` 的异步版本：frb worker 线程执行，不阻塞 UI。
+  Future<List<FuzzyHit>> filterAsync(
+          {required String query, required FuzzyConfig config, int? limit}) =>
+      RustLib.instance.api.crateApiFuzzyFuzzyCorpusFilterAsync(
+          that: this, query: query, config: config, limit: limit);
 
-  /// 释放占内存大头的 Utf32 索引，但**保留实例与源字符串**，便于低成本 `rehydrate`。
-  /// free 后内存回落到约「源字符串」大小（ASCII 下约为驻留态的 1/5）。
-  /// 幂等。free 状态下 `filter` 仍可用（每次从源临时转换，较慢，但无需跨 FFI 重传列表）。
-  void free() => RustLib.instance.api.crateApiFuzzyFuzzyCorpusFree(that: this);
+  /// 释放占内存大头的 Utf32 索引（与折叠副本），保留源字符串便于 `rehydrate`。幂等。
+  void free() => RustLib.instance.api.crateApiFuzzyFuzzyCorpusFree(
+        that: this,
+      );
 
-  /// 是否为空。
-  bool isEmpty() =>
-      RustLib.instance.api.crateApiFuzzyFuzzyCorpusIsEmpty(that: this);
+  bool isEmpty() => RustLib.instance.api.crateApiFuzzyFuzzyCorpusIsEmpty(
+        that: this,
+      );
 
-  /// 是否已驻留 Utf32 索引（free 后为 false）。
-  bool isHydrated() =>
-      RustLib.instance.api.crateApiFuzzyFuzzyCorpusIsHydrated(that: this);
+  bool isHydrated() => RustLib.instance.api.crateApiFuzzyFuzzyCorpusIsHydrated(
+        that: this,
+      );
 
-  /// 当前语料条目数。
-  int len() => RustLib.instance.api.crateApiFuzzyFuzzyCorpusLen(that: this);
+  int len() => RustLib.instance.api.crateApiFuzzyFuzzyCorpusLen(
+        that: this,
+      );
 
-  /// 从驻留的源字符串重建 Utf32 索引，恢复快速搜索。**无跨 FFI 编组开销**（源已在 Rust 侧）。
-  /// 已驻留时为空操作。
-  void rehydrate() =>
-      RustLib.instance.api.crateApiFuzzyFuzzyCorpusRehydrate(that: this);
+  /// 从源字符串重建 Utf32 索引（及折叠副本，若启用）。无跨 FFI 编组开销。幂等。
+  void rehydrate() => RustLib.instance.api.crateApiFuzzyFuzzyCorpusRehydrate(
+        that: this,
+      );
 
-  /// 批量按下标删除(内部降序去重删除,避免位移错乱)。
+  /// 批量按下标删除（内部降序去重）。
   void removeIndices({required List<int> indices}) => RustLib.instance.api
       .crateApiFuzzyFuzzyCorpusRemoveIndices(that: this, indices: indices);
 
-  /// 替换指定下标的候选(越界忽略)。O(1)。
+  /// 替换指定下标（越界忽略）。
   void setAt({required int index, required String item}) => RustLib.instance.api
       .crateApiFuzzyFuzzyCorpusSetAt(that: this, index: index, item: item);
 }

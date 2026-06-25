@@ -469,10 +469,13 @@ fn wire__crate__api__fuzzy__FuzzyCorpus_new_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_items = <Vec<String>>::sse_decode(&mut deserializer);
+            let api_ignore_case_indices = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
-                let output_ok =
-                    Result::<_, ()>::Ok(crate::api::fuzzy::FuzzyCorpus::new(api_items))?;
+                let output_ok = Result::<_, ()>::Ok(crate::api::fuzzy::FuzzyCorpus::new(
+                    api_items,
+                    api_ignore_case_indices,
+                ))?;
                 Ok(output_ok)
             })())
         },
@@ -952,10 +955,12 @@ impl SseDecode for crate::api::fuzzy::FuzzyConfig {
         let mut var_ignoreCase = <bool>::sse_decode(deserializer);
         let mut var_normalize = <bool>::sse_decode(deserializer);
         let mut var_preferPrefix = <bool>::sse_decode(deserializer);
+        let mut var_mode = <crate::api::fuzzy::MatchMode>::sse_decode(deserializer);
         return crate::api::fuzzy::FuzzyConfig {
             ignore_case: var_ignoreCase,
             normalize: var_normalize,
             prefer_prefix: var_preferPrefix,
+            mode: var_mode,
         };
     }
 }
@@ -983,6 +988,13 @@ impl SseDecode for crate::api::fuzzy::FuzzyMatch {
             score: var_score,
             indices: var_indices,
         };
+    }
+}
+
+impl SseDecode for i32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_i32::<NativeEndian>().unwrap()
     }
 }
 
@@ -1034,6 +1046,20 @@ impl SseDecode for Vec<u8> {
     }
 }
 
+impl SseDecode for crate::api::fuzzy::MatchMode {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::fuzzy::MatchMode::Fuzzy,
+            1 => crate::api::fuzzy::MatchMode::Substring,
+            2 => crate::api::fuzzy::MatchMode::Prefix,
+            3 => crate::api::fuzzy::MatchMode::Word,
+            _ => unreachable!("Invalid variant for MatchMode: {}", inner),
+        };
+    }
+}
+
 impl SseDecode for Option<crate::api::fuzzy::FuzzyMatch> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1079,13 +1105,6 @@ impl SseDecode for usize {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         deserializer.cursor.read_u64::<NativeEndian>().unwrap() as _
-    }
-}
-
-impl SseDecode for i32 {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        deserializer.cursor.read_i32::<NativeEndian>().unwrap()
     }
 }
 
@@ -1163,6 +1182,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::fuzzy::FuzzyConfig {
             self.ignore_case.into_into_dart().into_dart(),
             self.normalize.into_into_dart().into_dart(),
             self.prefer_prefix.into_into_dart().into_dart(),
+            self.mode.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1215,6 +1235,26 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::fuzzy::FuzzyMatch>
         self
     }
 }
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::fuzzy::MatchMode {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Fuzzy => 0.into_dart(),
+            Self::Substring => 1.into_dart(),
+            Self::Prefix => 2.into_dart(),
+            Self::Word => 3.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::fuzzy::MatchMode {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::fuzzy::MatchMode>
+    for crate::api::fuzzy::MatchMode
+{
+    fn into_into_dart(self) -> crate::api::fuzzy::MatchMode {
+        self
+    }
+}
 
 impl SseEncode for FuzzyCorpus {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -1254,6 +1294,7 @@ impl SseEncode for crate::api::fuzzy::FuzzyConfig {
         <bool>::sse_encode(self.ignore_case, serializer);
         <bool>::sse_encode(self.normalize, serializer);
         <bool>::sse_encode(self.prefer_prefix, serializer);
+        <crate::api::fuzzy::MatchMode>::sse_encode(self.mode, serializer);
     }
 }
 
@@ -1271,6 +1312,13 @@ impl SseEncode for crate::api::fuzzy::FuzzyMatch {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <u32>::sse_encode(self.score, serializer);
         <Vec<u32>>::sse_encode(self.indices, serializer);
+    }
+}
+
+impl SseEncode for i32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_i32::<NativeEndian>(self).unwrap();
     }
 }
 
@@ -1311,6 +1359,24 @@ impl SseEncode for Vec<u8> {
         for item in self {
             <u8>::sse_encode(item, serializer);
         }
+    }
+}
+
+impl SseEncode for crate::api::fuzzy::MatchMode {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::fuzzy::MatchMode::Fuzzy => 0,
+                crate::api::fuzzy::MatchMode::Substring => 1,
+                crate::api::fuzzy::MatchMode::Prefix => 2,
+                crate::api::fuzzy::MatchMode::Word => 3,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
     }
 }
 
@@ -1360,13 +1426,6 @@ impl SseEncode for usize {
             .cursor
             .write_u64::<NativeEndian>(self as _)
             .unwrap();
-    }
-}
-
-impl SseEncode for i32 {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        serializer.cursor.write_i32::<NativeEndian>(self).unwrap();
     }
 }
 

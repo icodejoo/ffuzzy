@@ -25,6 +25,7 @@ export 'src/rust/api/fuzzy.dart'
         FuzzyConfig,
         FuzzyHit,
         FuzzyMatch,
+        MatchMode,
         fuzzyMatch,
         fuzzyMatchIndices,
         fuzzyFilter,
@@ -41,6 +42,7 @@ const FuzzyConfig kDefaultFuzzyConfig = FuzzyConfig(
   ignoreCase: true,
   normalize: true,
   preferPrefix: true,
+  mode: MatchMode.fuzzy,
 );
 
 /// 插件入口:初始化收口。
@@ -77,13 +79,23 @@ class FuzzyOutput<T> {
 ///    `buildIndices` 即用它在 Rust 侧重建。
 ///  - **[dispose] 两侧全销毁**:释放 Rust 索引 + 丢弃 Dart 侧数据引用,实例不可再用,需重建。
 abstract class _IndexedMatcher {
-  _IndexedMatcher(this.indexed, this.config);
+  _IndexedMatcher(this.indexed, this.config, this.ignoreCaseIndices);
 
   /// 是否启用 Rust 侧常驻索引;false 则每次把整表传入 Rust。
   final bool indexed;
 
-  /// 匹配配置。
+  /// 匹配配置(默认值;`ignoreCase`/`mode` 可在 match 时按查询覆盖)。
   final FuzzyConfig config;
+
+  /// 是否额外常驻一份折叠(小写)索引,让 `ignoreCase=true` 的简单/子序列模式也走快路径
+  /// (代价 ~2× 简单索引内存)。仅 `indexed=true` 生效。
+  final bool ignoreCaseIndices;
+
+  /// 按查询覆盖 `ignoreCase`/`mode`,无覆盖时复用构造配置(零分配)。
+  FuzzyConfig _cfg({bool? ignoreCase, MatchMode? mode}) =>
+      (ignoreCase == null && mode == null)
+          ? config
+          : config.copyWith(ignoreCase: ignoreCase, mode: mode);
 
   FuzzyCorpus? _corpus;
   bool _disposed = false;
@@ -117,7 +129,7 @@ abstract class _IndexedMatcher {
       throw StateError('无数据源,请先 refresh(source) 再 buildIndices()');
     }
     _freeWhenIdle = false;
-    _corpus = FuzzyCorpus(items: hs);
+    _corpus = FuzzyCorpus(items: hs, ignoreCaseIndices: ignoreCaseIndices);
   }
 
   /// 只释放 Rust 侧索引(Dart 侧源/投影保留,`buildIndices` 可秒级重建)。
@@ -164,12 +176,13 @@ abstract class _IndexedMatcher {
     }
   }
 
-  List<FuzzyHit> _rawMatch(String query, int? limit) {
+  List<FuzzyHit> _rawMatch(String query, int? limit, [FuzzyConfig? cfgOverride]) {
     _ensureAlive();
     _checkLimit(limit);
     if (!ffuzzy.isInitialized) {
       throw StateError('ffuzzy 尚未初始化完成,同步方法前请先 `await ffuzzy.ensureInitialized()`');
     }
+    final cfg = cfgOverride ?? config;
     final hs = _haystacks;
     if (hs == null) {
       throw StateError('无数据源,请先 refresh(source)');
@@ -177,15 +190,17 @@ abstract class _IndexedMatcher {
     // 有索引走索引(快);无索引(未建/已 freeIndices/indexed=false)退化为整表扫描
     // (慢,但不分配持久索引、绝不自动重建)。
     if (_corpus != null) {
-      return _corpus!.filter(query: query, config: config, limit: limit);
+      return _corpus!.filter(query: query, config: cfg, limit: limit);
     }
     _warnScanFallback();
-    return fuzzyFilter(query: query, items: hs, config: config, limit: limit);
+    return fuzzyFilter(query: query, items: hs, config: cfg, limit: limit);
   }
 
-  Future<List<FuzzyHit>> _rawMatchAsync(String query, int? limit) async {
+  Future<List<FuzzyHit>> _rawMatchAsync(String query, int? limit,
+      [FuzzyConfig? cfgOverride]) async {
     _ensureAlive();
     _checkLimit(limit);
+    final cfg = cfgOverride ?? config;
     final gen = _generation; // 发起时的版本
     _inFlight++; // 同步占位，确保紧随的 dispose/free 能感知到在飞搜索
     try {
@@ -195,13 +210,13 @@ abstract class _IndexedMatcher {
       if (gen != _generation || hs == null) return const <FuzzyHit>[];
       final List<FuzzyHit> result;
       if (_corpus != null) {
-        result = await _corpus!.filterAsync(query: query, config: config, limit: limit);
+        result = await _corpus!.filterAsync(query: query, config: cfg, limit: limit);
       } else {
         _warnScanFallback();
         result = await fuzzyFilterAsync(
           query: query,
           items: hs,
-          config: config,
+          config: cfg,
           limit: limit,
         );
       }
@@ -224,7 +239,7 @@ abstract class _IndexedMatcher {
       _corpus?.dispose(); // 无在飞搜索才显式释放旧索引
     }
     // 有在飞搜索时,旧 corpus 由 Rust Arc 持有至其结束、之后 GC 回收;这里直接换新引用。
-    _corpus = FuzzyCorpus(items: hs);
+    _corpus = FuzzyCorpus(items: hs, ignoreCaseIndices: ignoreCaseIndices);
     _freeWhenIdle = false;
   }
 
@@ -276,8 +291,9 @@ class FuzzyStringMatcher extends _IndexedMatcher {
     List<String> items, {
     bool indexed = true,
     FuzzyConfig config = kDefaultFuzzyConfig,
+    bool ignoreCaseIndices = false,
   })  : _src = List<String>.of(items), // 可增长,支持 add
-        super(indexed, config);
+        super(indexed, config, ignoreCaseIndices);
 
   List<String>? _src;
 
@@ -346,21 +362,26 @@ class FuzzyStringMatcher extends _IndexedMatcher {
   int get length => _src?.length ?? 0;
 
   /// 同步搜索。无索引时退化为整表扫描(慢);用 [buildIndices] 加速。
-  List<FuzzyHit> match(String query, {int? limit}) => _rawMatch(query, limit);
+  /// [ignoreCase]/[mode] 可按本次查询覆盖构造时的配置。
+  List<FuzzyHit> match(String query,
+          {int? limit, bool? ignoreCase, MatchMode? mode}) =>
+      _rawMatch(query, limit, _cfg(ignoreCase: ignoreCase, mode: mode));
 
   /// 异步搜索:后台线程执行,不阻塞 UI。
-  Future<List<FuzzyHit>> matchAsync(String query, {int? limit}) =>
-      _rawMatchAsync(query, limit);
+  Future<List<FuzzyHit>> matchAsync(String query,
+          {int? limit, bool? ignoreCase, MatchMode? mode}) =>
+      _rawMatchAsync(query, limit, _cfg(ignoreCase: ignoreCase, mode: mode));
 
   /// 取最佳一条(与 [match] 元素类型一致):无命中返回 `null`。
-  FuzzyHit? single(String query) {
-    final r = match(query, limit: 1);
+  FuzzyHit? single(String query, {bool? ignoreCase, MatchMode? mode}) {
+    final r = match(query, limit: 1, ignoreCase: ignoreCase, mode: mode);
     return r.isEmpty ? null : r.first;
   }
 
   /// [single] 的异步版本。
-  Future<FuzzyHit?> singleAsync(String query) async {
-    final r = await matchAsync(query, limit: 1);
+  Future<FuzzyHit?> singleAsync(String query,
+      {bool? ignoreCase, MatchMode? mode}) async {
+    final r = await matchAsync(query, limit: 1, ignoreCase: ignoreCase, mode: mode);
     return r.isEmpty ? null : r.first;
   }
 
@@ -381,9 +402,10 @@ class FuzzyMatcher<T> extends _IndexedMatcher {
     String Function(T) stringOf, {
     bool indexed = true,
     FuzzyConfig config = kDefaultFuzzyConfig,
+    bool ignoreCaseIndices = false,
   })  : _objs = List<T>.of(items), // 可增长,支持 add
         _stringOf = stringOf,
-        super(indexed, config);
+        super(indexed, config, ignoreCaseIndices);
 
   /// 便捷构造:候选为 `Map` 且按字段名 [key] 搜索(如 `'gameName'`)。
   static FuzzyMatcher<Map<String, dynamic>> key(
@@ -391,12 +413,14 @@ class FuzzyMatcher<T> extends _IndexedMatcher {
     String key, {
     bool indexed = true,
     FuzzyConfig config = kDefaultFuzzyConfig,
+    bool ignoreCaseIndices = false,
   }) =>
       FuzzyMatcher<Map<String, dynamic>>(
         items,
         (m) => (m[key] as String?) ?? '',
         indexed: indexed,
         config: config,
+        ignoreCaseIndices: ignoreCaseIndices,
       );
 
   List<T>? _objs;
@@ -479,24 +503,29 @@ class FuzzyMatcher<T> extends _IndexedMatcher {
   }
 
   /// 同步搜索,返回命中对象。无索引时退化为整表扫描(慢);用 [buildIndices] 加速。
-  List<FuzzyOutput<T>> match(String query, {int? limit}) =>
-      _project(_rawMatch(query, limit));
+  /// [ignoreCase]/[mode] 可按本次查询覆盖构造时的配置。
+  List<FuzzyOutput<T>> match(String query,
+          {int? limit, bool? ignoreCase, MatchMode? mode}) =>
+      _project(_rawMatch(query, limit, _cfg(ignoreCase: ignoreCase, mode: mode)));
 
   /// 异步搜索:后台线程执行,不阻塞 UI。
   /// 若搜索期间发生 [refresh]/[dispose],本次结果会被丢弃(返回空),由调用方按新状态重查。
-  Future<List<FuzzyOutput<T>>> matchAsync(String query, {int? limit}) async =>
-      _project(await _rawMatchAsync(query, limit));
+  Future<List<FuzzyOutput<T>>> matchAsync(String query,
+          {int? limit, bool? ignoreCase, MatchMode? mode}) async =>
+      _project(await _rawMatchAsync(
+          query, limit, _cfg(ignoreCase: ignoreCase, mode: mode)));
 
   /// 取最佳一条(与 [match] 元素类型一致,`FuzzyOutput<T>`):无命中返回 `null`。
   /// 命中对象用 `single(q)?.obj` 取。
-  FuzzyOutput<T>? single(String query) {
-    final r = match(query, limit: 1);
+  FuzzyOutput<T>? single(String query, {bool? ignoreCase, MatchMode? mode}) {
+    final r = match(query, limit: 1, ignoreCase: ignoreCase, mode: mode);
     return r.isEmpty ? null : r.first;
   }
 
   /// [single] 的异步版本。
-  Future<FuzzyOutput<T>?> singleAsync(String query) async {
-    final r = await matchAsync(query, limit: 1);
+  Future<FuzzyOutput<T>?> singleAsync(String query,
+      {bool? ignoreCase, MatchMode? mode}) async {
+    final r = await matchAsync(query, limit: 1, ignoreCase: ignoreCase, mode: mode);
     return r.isEmpty ? null : r.first;
   }
 
@@ -521,10 +550,16 @@ class FuzzyMatcher<T> extends _IndexedMatcher {
 
 /// 在默认/现有配置基础上改少量字段,避免每次写全三个字段。
 extension FuzzyConfigCopyWith on FuzzyConfig {
-  FuzzyConfig copyWith({bool? ignoreCase, bool? normalize, bool? preferPrefix}) =>
+  FuzzyConfig copyWith({
+    bool? ignoreCase,
+    bool? normalize,
+    bool? preferPrefix,
+    MatchMode? mode,
+  }) =>
       FuzzyConfig(
         ignoreCase: ignoreCase ?? this.ignoreCase,
         normalize: normalize ?? this.normalize,
         preferPrefix: preferPrefix ?? this.preferPrefix,
+        mode: mode ?? this.mode,
       );
 }

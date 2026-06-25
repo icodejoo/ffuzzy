@@ -221,7 +221,8 @@ void main() {
     });
 
     test('FuzzyConfig.ignoreCase 生效', () {
-      const respect = FuzzyConfig(ignoreCase: false, normalize: true, preferPrefix: false);
+      const respect = FuzzyConfig(
+          ignoreCase: false, normalize: true, preferPrefix: false, mode: MatchMode.fuzzy);
       expect(fuzzyMatch(query: 'rust', haystack: 'RUST', config: respect), isNull);
       expect(fuzzyMatch(query: 'rust', haystack: 'RUST', config: kDefaultFuzzyConfig), isNotNull);
     });
