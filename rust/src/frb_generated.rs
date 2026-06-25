@@ -469,13 +469,10 @@ fn wire__crate__api__fuzzy__FuzzyCorpus_new_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_items = <Vec<String>>::sse_decode(&mut deserializer);
-            let api_ignore_case_indices = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
-                let output_ok = Result::<_, ()>::Ok(crate::api::fuzzy::FuzzyCorpus::new(
-                    api_items,
-                    api_ignore_case_indices,
-                ))?;
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::api::fuzzy::FuzzyCorpus::new(api_items))?;
                 Ok(output_ok)
             })())
         },
@@ -719,15 +716,11 @@ fn wire__crate__api__fuzzy__fuzzy_corpus_new_async_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_items = <Vec<String>>::sse_decode(&mut deserializer);
-            let api_ignore_case_indices = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok =
-                        Result::<_, ()>::Ok(crate::api::fuzzy::fuzzy_corpus_new_async(
-                            api_items,
-                            api_ignore_case_indices,
-                        ))?;
+                        Result::<_, ()>::Ok(crate::api::fuzzy::fuzzy_corpus_new_async(api_items))?;
                     Ok(output_ok)
                 })())
             }

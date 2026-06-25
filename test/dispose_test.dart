@@ -14,8 +14,7 @@ void main() {
 
   group('FuzzyCorpus（底层 opaque）释放', () {
     test('dispose 后 isDisposed 为真，再使用抛异常', () {
-      final corpus = FuzzyCorpus(
-          items: const ['service42', 'widget7'], ignoreCaseIndices: false);
+      final corpus = FuzzyCorpus(items: const ['service42', 'widget7']);
       expect(corpus.isDisposed, isFalse);
       expect(corpus.len(), 2);
 

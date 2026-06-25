@@ -81,17 +81,13 @@ class FuzzyOutput<T> {
 ///    `buildIndices` 即用它在 Rust 侧重建。
 ///  - **[dispose] 两侧全销毁**:释放 Rust 索引 + 丢弃 Dart 侧数据引用,实例不可再用,需重建。
 abstract class _IndexedMatcher {
-  _IndexedMatcher(this.indexed, this.config, this.ignoreCaseIndices);
+  _IndexedMatcher(this.indexed, this.config);
 
   /// 是否启用 Rust 侧常驻索引;false 则每次把整表传入 Rust。
   final bool indexed;
 
   /// 匹配配置(默认值;`ignoreCase`/`mode` 可在 match 时按查询覆盖)。
   final FuzzyConfig config;
-
-  /// 是否额外常驻一份折叠(小写)索引,让 `ignoreCase=true` 的简单/子序列模式也走快路径
-  /// (代价 ~2× 简单索引内存)。仅 `indexed=true` 生效。
-  final bool ignoreCaseIndices;
 
   /// 按查询覆盖 `ignoreCase`/`mode`,无覆盖时复用构造配置(零分配)。
   FuzzyConfig _cfg({bool? ignoreCase, MatchMode? mode}) =>
@@ -135,7 +131,7 @@ abstract class _IndexedMatcher {
       throw StateError('无数据源,请先 refresh(source) 再 buildIndices()');
     }
     _freeWhenIdle = false;
-    _corpus = FuzzyCorpus(items: hs, ignoreCaseIndices: ignoreCaseIndices);
+    _corpus = FuzzyCorpus(items: hs);
     _onIndexBuilt();
   }
 
@@ -154,7 +150,7 @@ abstract class _IndexedMatcher {
     await ffuzzy.ensureInitialized();
     if (_disposed || gen != _generation) return; // 期间被 dispose/refresh -> 放弃
     final corpus =
-        await fuzzyCorpusNewAsync(items: hs, ignoreCaseIndices: ignoreCaseIndices);
+        await fuzzyCorpusNewAsync(items: hs);
     if (_disposed || gen != _generation) {
       corpus.dispose(); // 已过期,弃用刚建好的索引
       return;
@@ -271,7 +267,7 @@ abstract class _IndexedMatcher {
       _corpus?.dispose(); // 无在飞搜索才显式释放旧索引
     }
     // 有在飞搜索时,旧 corpus 由 Rust Arc 持有至其结束、之后 GC 回收;这里直接换新引用。
-    _corpus = FuzzyCorpus(items: hs, ignoreCaseIndices: ignoreCaseIndices);
+    _corpus = FuzzyCorpus(items: hs);
     _freeWhenIdle = false;
     _onIndexBuilt();
   }
@@ -324,9 +320,8 @@ class FuzzyStringMatcher extends _IndexedMatcher {
     List<String> items, {
     bool indexed = true,
     FuzzyConfig config = kDefaultFuzzyConfig,
-    bool ignoreCaseIndices = false,
   })  : _src = List<String>.of(items), // 可增长,支持 add
-        super(indexed, config, ignoreCaseIndices);
+        super(indexed, config);
 
   List<String>? _src;
 
@@ -435,10 +430,9 @@ class FuzzyMatcher<T> extends _IndexedMatcher {
     String Function(T) stringOf, {
     bool indexed = true,
     FuzzyConfig config = kDefaultFuzzyConfig,
-    bool ignoreCaseIndices = false,
   })  : _objs = List<T>.of(items), // 可增长,支持 add
         _stringOf = stringOf,
-        super(indexed, config, ignoreCaseIndices);
+        super(indexed, config);
 
   /// 便捷构造:候选为 `Map` 且按字段名 [key] 搜索(如 `'gameName'`)。
   static FuzzyMatcher<Map<String, dynamic>> key(
@@ -446,14 +440,12 @@ class FuzzyMatcher<T> extends _IndexedMatcher {
     String key, {
     bool indexed = true,
     FuzzyConfig config = kDefaultFuzzyConfig,
-    bool ignoreCaseIndices = false,
   }) =>
       FuzzyMatcher<Map<String, dynamic>>(
         items,
         (m) => (m[key] as String?) ?? '',
         indexed: indexed,
         config: config,
-        ignoreCaseIndices: ignoreCaseIndices,
       );
 
   List<T>? _objs;

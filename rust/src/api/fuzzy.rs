@@ -10,7 +10,7 @@
 //!
 //! 大小写：`ignore_case` 是**按查询**的参数。简单模式/子序列在「原样」或「折叠（小写）」字符串上匹配——
 //! 默认在原样上：`ignore_case=false` 直接比（快），`ignore_case=true` 则把候选临时折叠后比（慢，少数路径）；
-//! 若构造时开启 `ignore_case_indices`，则常驻一份折叠副本让 `ignore_case=true` 也走快路径。
+//! `ignore_case=true` 的简单模式首次查询惰性构建一份折叠（小写）副本并缓存，之后复用。
 //! Fuzzy 的大小写由 nucleo 在匹配时折叠，无需折叠副本。
 //! （注：极少数大小写折叠会改变字符数的 Unicode 字符，折叠路径下高亮下标可能与原串轻微错位；ASCII 无此问题。）
 
@@ -268,7 +268,7 @@ fn scan_haystacks_parallel(
     cfg: &FuzzyConfig,
 ) -> Vec<Scored> {
     let nthreads = num_threads(haystacks.len());
-    let chunk = ((haystacks.len() + nthreads - 1) / nthreads).max(1); // .max(1): 防 chunks(0) panic
+    let chunk = haystacks.len().div_ceil(nthreads).max(1); // .max(1): 防 chunks(0) panic
     std::thread::scope(|s| {
         let handles: Vec<_> = haystacks
             .chunks(chunk)
@@ -519,17 +519,11 @@ pub struct FuzzyCorpus {
     items: Vec<String>,
     /// 预转换的 Utf32 索引（`Fuzzy` 用）；`free` 后为 `None`。
     haystacks: Option<Vec<Utf32String>>,
-    /// 可选的折叠（小写）副本：构造时 `ignore_case_indices=true` 才建，让简单模式在
-    /// `ignore_case=true` 时走快路径；`free` 后为 `None`。
-    folded: Option<Vec<String>>,
-    /// 是否启用折叠副本（决定 rehydrate 时是否重建）。
-    keep_folded: bool,
     /// 增量搜索缓存（`Mutex` 因 `filter` 是 `&self` 且异步在 worker 线程跑）。
     /// 任何增删改/free 都会清空。
     incr: std::sync::Mutex<Option<IncrCache>>,
-    /// 惰性折叠副本缓存：当 `ignore_case_indices=false`（无常驻 `folded`）却用 `ignore_case=true`
-    /// 的简单模式时，**首次查询构建一次**并缓存（`Arc` 便于短持锁克隆),避免每查都全量降小写。
-    /// 任何增删改/free 失效。
+    /// 惰性折叠（小写）副本缓存：用 `ignore_case=true` 的简单模式时**首次查询构建一次**并缓存
+    /// （`Arc` 便于短持锁克隆），之后复用，避免每查都全量降小写。任何增删改/free 失效。
     folded_cache: std::sync::Mutex<Option<std::sync::Arc<Vec<String>>>>,
 }
 
@@ -538,7 +532,7 @@ fn build_haystacks(items: &[String]) -> Vec<Utf32String> {
     #[cfg(not(target_arch = "wasm32"))]
     if items.len() >= PARALLEL_THRESHOLD && num_threads(items.len()) > 1 {
         let nthreads = num_threads(items.len());
-        let chunk = ((items.len() + nthreads - 1) / nthreads).max(1); // .max(1): 防 chunks(0) panic
+        let chunk = items.len().div_ceil(nthreads).max(1); // .max(1): 防 chunks(0) panic
         return std::thread::scope(|s| {
             let handles: Vec<_> = items
                 .chunks(chunk)
@@ -568,24 +562,17 @@ fn build_folded(items: &[String]) -> Vec<String> {
 /// 异步构建语料：在 frb worker 线程执行 Utf32 转换/折叠（大数据时较重），**不阻塞 Dart UI 线程**。
 /// 与 [FuzzyCorpus::new] 等价，只是不标 `#[frb(sync)]`（Dart 侧返回 `Future<FuzzyCorpus>`）。
 /// 注：候选列表的跨 FFI 编组同样在 worker 线程；但 Dart 侧的投影（stringOf）仍在调用线程算。
-pub fn fuzzy_corpus_new_async(items: Vec<String>, ignore_case_indices: bool) -> FuzzyCorpus {
-    FuzzyCorpus::build(items, ignore_case_indices)
+pub fn fuzzy_corpus_new_async(items: Vec<String>) -> FuzzyCorpus {
+    FuzzyCorpus::build(items)
 }
 
 impl FuzzyCorpus {
     /// 实际构建逻辑（sync `new` 与 async `fuzzy_corpus_new_async` 共用）。
-    fn build(items: Vec<String>, ignore_case_indices: bool) -> FuzzyCorpus {
+    fn build(items: Vec<String>) -> FuzzyCorpus {
         let haystacks = Some(build_haystacks(&items));
-        let folded = if ignore_case_indices {
-            Some(build_folded(&items))
-        } else {
-            None
-        };
         FuzzyCorpus {
             items,
             haystacks,
-            folded,
-            keep_folded: ignore_case_indices,
             incr: std::sync::Mutex::new(None),
             folded_cache: std::sync::Mutex::new(None),
         }
@@ -612,20 +599,17 @@ impl FuzzyCorpus {
         a
     }
 
-    /// 用一组候选项构建语料。`ignore_case_indices=true` 时额外常驻一份折叠副本。
+    /// 用一组候选项构建语料。
     #[frb(sync)]
-    pub fn new(items: Vec<String>, ignore_case_indices: bool) -> FuzzyCorpus {
-        Self::build(items, ignore_case_indices)
+    pub fn new(items: Vec<String>) -> FuzzyCorpus {
+        Self::build(items)
     }
 
-    /// 末尾追加（不重建）。同步维护 Utf32 索引与折叠副本。
+    /// 末尾追加（不重建）。同步维护 Utf32 索引。
     #[frb(sync)]
     pub fn add(&mut self, items: Vec<String>) {
         if let Some(hs) = self.haystacks.as_mut() {
             hs.extend(items.iter().map(|s| Utf32String::from(s.as_str())));
-        }
-        if let Some(fd) = self.folded.as_mut() {
-            fd.extend(items.iter().map(|s| s.to_lowercase()));
         }
         self.items.extend(items);
         self.clear_caches();
@@ -640,9 +624,6 @@ impl FuzzyCorpus {
         }
         if let Some(hs) = self.haystacks.as_mut() {
             hs[i] = Utf32String::from(item.as_str());
-        }
-        if let Some(fd) = self.folded.as_mut() {
-            fd[i] = item.to_lowercase();
         }
         self.items[i] = item;
         self.clear_caches();
@@ -660,9 +641,6 @@ impl FuzzyCorpus {
                 if let Some(hs) = self.haystacks.as_mut() {
                     hs.remove(i);
                 }
-                if let Some(fd) = self.folded.as_mut() {
-                    fd.remove(i);
-                }
             }
         }
         self.clear_caches();
@@ -674,9 +652,6 @@ impl FuzzyCorpus {
         self.items.clear();
         if let Some(hs) = self.haystacks.as_mut() {
             hs.clear();
-        }
-        if let Some(fd) = self.folded.as_mut() {
-            fd.clear();
         }
         self.clear_caches();
     }
@@ -696,26 +671,22 @@ impl FuzzyCorpus {
         self.haystacks.is_some()
     }
 
-    /// 释放占内存大头的 Utf32 索引（与折叠副本），保留源字符串便于 `rehydrate`。幂等。
+    /// 释放占内存大头的 Utf32 索引，保留源字符串便于 `rehydrate`。幂等。
     #[frb(sync)]
     pub fn free(&mut self) {
         self.haystacks = None;
-        self.folded = None;
         self.clear_caches();
     }
 
-    /// 从源字符串重建 Utf32 索引（及折叠副本，若启用）。无跨 FFI 编组开销。幂等。
+    /// 从源字符串重建 Utf32 索引。无跨 FFI 编组开销。幂等。
     #[frb(sync)]
     pub fn rehydrate(&mut self) {
         if self.haystacks.is_none() {
             self.haystacks = Some(build_haystacks(&self.items));
-            if self.keep_folded {
-                self.folded = Some(build_folded(&self.items));
-            }
         }
     }
 
-    /// 非 Fuzzy 过滤：选好（原样/折叠）源后做字面/子序列匹配。
+    /// 非 Fuzzy 过滤：`ignore_case` 时用惰性折叠副本，否则用原样源；做字面/子序列匹配。
     fn filter_nonfuzzy(&self, query: &str, cfg: &FuzzyConfig, limit: Option<u32>) -> Vec<FuzzyHit> {
         let q = if cfg.ignore_case {
             query.to_lowercase()
@@ -723,16 +694,12 @@ impl FuzzyCorpus {
             query.to_string()
         };
         let lazy_arc;
-        let source: &[String] = match (cfg.ignore_case, &self.folded) {
-            // ignore_case + 有常驻折叠副本（ignoreCaseIndices=true）：最快路径。
-            (true, Some(folded)) => folded,
-            // ignore_case + 无常驻副本：用惰性缓存（首查构建一次,后续复用），避免每查全量降小写。
-            (true, None) => {
-                lazy_arc = self.lazy_folded();
-                lazy_arc.as_slice()
-            }
-            // 区分大小写：用原样源。
-            (false, _) => &self.items,
+        let source: &[String] = if cfg.ignore_case {
+            // 惰性折叠缓存：首查构建一次、后续复用，避免每查全量降小写。
+            lazy_arc = self.lazy_folded();
+            lazy_arc.as_slice()
+        } else {
+            &self.items
         };
         nonfuzzy_filter(source, &q, cfg.mode, limit)
     }
@@ -980,21 +947,19 @@ mod tests {
             "Dragon Gem".to_string(),
             "Fortune".to_string(),
         ];
-        for ici in [false, true] {
-            let corpus = FuzzyCorpus::new(items.clone(), ici);
-            for mode in [
-                MatchMode::Fuzzy,
-                MatchMode::Substring,
-                MatchMode::Prefix,
-                MatchMode::Word,
-            ] {
-                let cached = corpus.filter("gem".into(), cfg_mode(mode), None);
-                let stateless = fuzzy_filter("gem".into(), items.clone(), cfg_mode(mode), None);
-                assert_eq!(cached.len(), stateless.len(), "ici={ici} mode={mode:?}");
-                for (a, b) in cached.iter().zip(stateless.iter()) {
-                    assert_eq!(a.index, b.index, "ici={ici} mode={mode:?}");
-                    assert_eq!(a.indices, b.indices, "ici={ici} mode={mode:?}");
-                }
+        let corpus = FuzzyCorpus::new(items.clone());
+        for mode in [
+            MatchMode::Fuzzy,
+            MatchMode::Substring,
+            MatchMode::Prefix,
+            MatchMode::Word,
+        ] {
+            let cached = corpus.filter("gem".into(), cfg_mode(mode), None);
+            let stateless = fuzzy_filter("gem".into(), items.clone(), cfg_mode(mode), None);
+            assert_eq!(cached.len(), stateless.len(), "mode={mode:?}");
+            for (a, b) in cached.iter().zip(stateless.iter()) {
+                assert_eq!(a.index, b.index, "mode={mode:?}");
+                assert_eq!(a.indices, b.indices, "mode={mode:?}");
             }
         }
     }
@@ -1006,7 +971,7 @@ mod tests {
             "widget7".to_string(),
             "controller9".to_string(),
         ];
-        let mut corpus = FuzzyCorpus::new(items.clone(), true);
+        let mut corpus = FuzzyCorpus::new(items.clone());
         let before = corpus.filter("srvc".into(), cfg(), None);
         corpus.free();
         assert!(!corpus.is_hydrated());
@@ -1032,7 +997,7 @@ mod tests {
         // 构造 > PARALLEL_THRESHOLD 条触发多核,比对 parallel/serial 结果完全一致(确定性)。
         let items: Vec<String> =
             (0..25_000).map(|i| format!("item gem {i} dragon")).collect();
-        let corpus = FuzzyCorpus::new(items, false);
+        let corpus = FuzzyCorpus::new(items);
         let par = FuzzyConfig {
             parallel: true,
             ..FuzzyConfig::default()
@@ -1055,7 +1020,7 @@ mod tests {
     #[test]
     fn incremental_matches_nonincremental() {
         let items: Vec<String> = (0..3000).map(|i| format!("dragon gem {i}")).collect();
-        let corpus = FuzzyCorpus::new(items, false);
+        let corpus = FuzzyCorpus::new(items);
         let incr = || FuzzyConfig {
             incremental: true,
             ..FuzzyConfig::default()
@@ -1076,7 +1041,7 @@ mod tests {
     #[test]
     fn incremental_invalidated_on_mutation() {
         let mut corpus =
-            FuzzyCorpus::new(vec!["dragon".to_string(), "drag".to_string()], false);
+            FuzzyCorpus::new(vec!["dragon".to_string(), "drag".to_string()]);
         let incr = || FuzzyConfig {
             incremental: true,
             ..FuzzyConfig::default()
@@ -1123,7 +1088,7 @@ mod tests {
     #[test]
     fn incremental_backspace_and_rewrite() {
         let items: Vec<String> = (0..500).map(|i| format!("dragon gem {i}")).collect();
-        let corpus = FuzzyCorpus::new(items, false);
+        let corpus = FuzzyCorpus::new(items);
         let incr = || FuzzyConfig {
             incremental: true,
             ..FuzzyConfig::default()
@@ -1148,7 +1113,7 @@ mod tests {
         // ci=false "a" 只命中小写 'a'(idx 1,2);切到 ci=true "ab" 应能命中 "AB"(idx0)。
         // 若缺 ignore_case 守卫而复用旧命中集 {1,2},会漏掉 idx0。
         let items = vec!["AB".to_string(), "ab".to_string(), "Zab".to_string()];
-        let corpus = FuzzyCorpus::new(items, false);
+        let corpus = FuzzyCorpus::new(items);
         let ci_off = FuzzyConfig {
             incremental: true,
             ignore_case: false,

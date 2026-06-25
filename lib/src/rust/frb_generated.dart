@@ -108,8 +108,7 @@ abstract class RustLibApi extends BaseApi {
 
   int crateApiFuzzyFuzzyCorpusLen({required FuzzyCorpus that});
 
-  FuzzyCorpus crateApiFuzzyFuzzyCorpusNew(
-      {required List<String> items, required bool ignoreCaseIndices});
+  FuzzyCorpus crateApiFuzzyFuzzyCorpusNew({required List<String> items});
 
   void crateApiFuzzyFuzzyCorpusRehydrate({required FuzzyCorpus that});
 
@@ -124,7 +123,7 @@ abstract class RustLibApi extends BaseApi {
   Future<FuzzyConfig> crateApiFuzzyFuzzyConfigDefault();
 
   Future<FuzzyCorpus> crateApiFuzzyFuzzyCorpusNewAsync(
-      {required List<String> items, required bool ignoreCaseIndices});
+      {required List<String> items});
 
   List<FuzzyHit> crateApiFuzzyFuzzyFilter(
       {required String query,
@@ -387,13 +386,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  FuzzyCorpus crateApiFuzzyFuzzyCorpusNew(
-      {required List<String> items, required bool ignoreCaseIndices}) {
+  FuzzyCorpus crateApiFuzzyFuzzyCorpusNew({required List<String> items}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_String(items, serializer);
-        sse_encode_bool(ignoreCaseIndices, serializer);
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9)!;
       },
       codec: SseCodec(
@@ -402,7 +399,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: null,
       ),
       constMeta: kCrateApiFuzzyFuzzyCorpusNewConstMeta,
-      argValues: [items, ignoreCaseIndices],
+      argValues: [items],
       apiImpl: this,
     ));
   }
@@ -410,7 +407,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiFuzzyFuzzyCorpusNewConstMeta =>
       const TaskConstMeta(
         debugName: "FuzzyCorpus_new",
-        argNames: ["items", "ignoreCaseIndices"],
+        argNames: ["items"],
       );
 
   @override
@@ -542,12 +539,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Future<FuzzyCorpus> crateApiFuzzyFuzzyCorpusNewAsync(
-      {required List<String> items, required bool ignoreCaseIndices}) {
+      {required List<String> items}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_String(items, serializer);
-        sse_encode_bool(ignoreCaseIndices, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 15, port: port_);
       },
@@ -557,7 +553,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: null,
       ),
       constMeta: kCrateApiFuzzyFuzzyCorpusNewAsyncConstMeta,
-      argValues: [items, ignoreCaseIndices],
+      argValues: [items],
       apiImpl: this,
     ));
   }
@@ -565,7 +561,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiFuzzyFuzzyCorpusNewAsyncConstMeta =>
       const TaskConstMeta(
         debugName: "fuzzy_corpus_new_async",
-        argNames: ["items", "ignoreCaseIndices"],
+        argNames: ["items"],
       );
 
   @override
@@ -1345,7 +1341,7 @@ class FuzzyCorpusImpl extends RustOpaque implements FuzzyCorpus {
         RustLib.instance.api.rust_arc_decrement_strong_count_FuzzyCorpusPtr,
   );
 
-  /// 末尾追加（不重建）。同步维护 Utf32 索引与折叠副本。
+  /// 末尾追加（不重建）。同步维护 Utf32 索引。
   void add({required List<String> items}) => RustLib.instance.api
       .crateApiFuzzyFuzzyCorpusAdd(that: this, items: items);
 
@@ -1366,7 +1362,7 @@ class FuzzyCorpusImpl extends RustOpaque implements FuzzyCorpus {
       RustLib.instance.api.crateApiFuzzyFuzzyCorpusFilterAsync(
           that: this, query: query, config: config, limit: limit);
 
-  /// 释放占内存大头的 Utf32 索引（与折叠副本），保留源字符串便于 `rehydrate`。幂等。
+  /// 释放占内存大头的 Utf32 索引，保留源字符串便于 `rehydrate`。幂等。
   void free() => RustLib.instance.api.crateApiFuzzyFuzzyCorpusFree(
         that: this,
       );
@@ -1383,7 +1379,7 @@ class FuzzyCorpusImpl extends RustOpaque implements FuzzyCorpus {
         that: this,
       );
 
-  /// 从源字符串重建 Utf32 索引（及折叠副本，若启用）。无跨 FFI 编组开销。幂等。
+  /// 从源字符串重建 Utf32 索引。无跨 FFI 编组开销。幂等。
   void rehydrate() => RustLib.instance.api.crateApiFuzzyFuzzyCorpusRehydrate(
         that: this,
       );

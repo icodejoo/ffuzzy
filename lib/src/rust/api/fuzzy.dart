@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `build_folded`, `build_haystacks`, `build`, `case_matching`, `clear_incr`, `filter_nonfuzzy`, `finish_fuzzy`, `fold_pair`, `fuzzy_filter_hydrated`, `fuzzy_rank_items`, `indices_one`, `make_matcher`, `make_pattern`, `nonfuzzy_filter`, `nonfuzzy_match_indices`, `normalization`, `num_threads`, `rank_scored`, `scan_haystacks_parallel`, `scan_haystacks_serial`, `scan_haystacks`, `scan_one`, `scan_subset`, `should_parallel`
+// These functions are ignored because they are not marked as `pub`: `build_folded`, `build_haystacks`, `build`, `case_matching`, `clear_caches`, `filter_nonfuzzy`, `finish_fuzzy`, `fold_pair`, `fuzzy_filter_hydrated`, `fuzzy_rank_items`, `incr_cap`, `indices_one`, `lazy_folded`, `make_matcher`, `make_pattern`, `nonfuzzy_filter`, `nonfuzzy_match_indices`, `normalization`, `num_threads`, `rank_scored`, `scan_haystacks_parallel`, `scan_haystacks_serial`, `scan_haystacks`, `scan_one`, `scan_subset`, `should_parallel`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `IncrCache`, `Scored`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `eq`, `fmt`
 
@@ -51,14 +51,12 @@ Future<List<FuzzyHit>> fuzzyFilterAsync(
 /// 异步构建语料：在 frb worker 线程执行 Utf32 转换/折叠（大数据时较重），**不阻塞 Dart UI 线程**。
 /// 与 [FuzzyCorpus::new] 等价，只是不标 `#[frb(sync)]`（Dart 侧返回 `Future<FuzzyCorpus>`）。
 /// 注：候选列表的跨 FFI 编组同样在 worker 线程；但 Dart 侧的投影（stringOf）仍在调用线程算。
-Future<FuzzyCorpus> fuzzyCorpusNewAsync(
-        {required List<String> items, required bool ignoreCaseIndices}) =>
-    RustLib.instance.api.crateApiFuzzyFuzzyCorpusNewAsync(
-        items: items, ignoreCaseIndices: ignoreCaseIndices);
+Future<FuzzyCorpus> fuzzyCorpusNewAsync({required List<String> items}) =>
+    RustLib.instance.api.crateApiFuzzyFuzzyCorpusNewAsync(items: items);
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FuzzyCorpus>>
 abstract class FuzzyCorpus implements RustOpaqueInterface {
-  /// 末尾追加（不重建）。同步维护 Utf32 索引与折叠副本。
+  /// 末尾追加（不重建）。同步维护 Utf32 索引。
   void add({required List<String> items});
 
   /// 清空全部候选（保留实例与驻留状态）。
@@ -72,7 +70,7 @@ abstract class FuzzyCorpus implements RustOpaqueInterface {
   Future<List<FuzzyHit>> filterAsync(
       {required String query, required FuzzyConfig config, int? limit});
 
-  /// 释放占内存大头的 Utf32 索引（与折叠副本），保留源字符串便于 `rehydrate`。幂等。
+  /// 释放占内存大头的 Utf32 索引，保留源字符串便于 `rehydrate`。幂等。
   void free();
 
   bool isEmpty();
@@ -81,13 +79,11 @@ abstract class FuzzyCorpus implements RustOpaqueInterface {
 
   int len();
 
-  /// 用一组候选项构建语料。`ignore_case_indices=true` 时额外常驻一份折叠副本。
-  factory FuzzyCorpus(
-          {required List<String> items, required bool ignoreCaseIndices}) =>
-      RustLib.instance.api.crateApiFuzzyFuzzyCorpusNew(
-          items: items, ignoreCaseIndices: ignoreCaseIndices);
+  /// 用一组候选项构建语料。
+  factory FuzzyCorpus({required List<String> items}) =>
+      RustLib.instance.api.crateApiFuzzyFuzzyCorpusNew(items: items);
 
-  /// 从源字符串重建 Utf32 索引（及折叠副本，若启用）。无跨 FFI 编组开销。幂等。
+  /// 从源字符串重建 Utf32 索引。无跨 FFI 编组开销。幂等。
   void rehydrate();
 
   /// 批量按下标删除（内部降序去重）。
