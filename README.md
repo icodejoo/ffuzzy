@@ -1,306 +1,249 @@
 # ffuzzy
 
-高性能模糊搜索 Flutter 插件:基于 [`nucleo-matcher`](https://crates.io/crates/nucleo)(Rust,
-Helix 编辑器同款引擎)+ [`flutter_rust_bridge`](https://pub.dev/packages/flutter_rust_bridge),
-fzf 式子序列匹配。十万级数据下比常见纯 Dart 模糊库快 **45–300 倍**。
+**English** | [中文](README.zh-CN.md)
 
-## 特性
-- ⚡ **极快**:Rust nucleo 引擎 + 常驻索引,48.8 万条单次查询约 17ms。
-- 🎯 **对象 / 字符串均可搜**:`FuzzyMatcher<T>` 直接返回命中对象,`FuzzyStringMatcher` 返回原列表下标。
-- ✨ **命中高亮**:返回命中字符下标,直接用于高亮。
-- 🧵 **同步 + 异步**:`matchAsync` 在后台线程执行,不阻塞 UI。
-- 🗂️ **可控索引**:按需 `buildIndices` / `freeIndices`,内存占用自主掌控。
-- 🔁 **增删改清**:`add` / `update` / `removeWhere` / `clear` / `refresh` 增量维护,无需整体重建。
-- ⚙️ **可配置**:忽略大小写、Unicode 归一化、前缀优先(已规避 nucleo issue #92)。
+High-performance fuzzy search for Flutter, powered by [`nucleo-matcher`](https://crates.io/crates/nucleo)
+(Rust — the same engine behind the Helix editor) via [`flutter_rust_bridge`](https://pub.dev/packages/flutter_rust_bridge).
+fzf-style subsequence matching, **~250–1600× faster** than common pure-Dart fuzzy libraries at hundreds-of-thousands scale.
 
-## 支持平台
-Android · iOS · macOS · Windows · Linux(均为原生交叉编译)。Web 需单独编 WASM,暂未内置。
+## Features
+- ⚡ **Very fast**: Rust nucleo engine + resident index — a single query over 488k items is ~3ms (multi-core; ~18ms single-threaded).
+- 🎯 **Objects or strings**: `FuzzyMatcher<T>` returns the matched object directly; `FuzzyStringMatcher` returns the original list index.
+- ✨ **Match highlighting**: returns the matched character indices, ready for highlighting.
+- 🧵 **Sync + async**: `matchAsync` runs on a background thread, never blocking the UI.
+- 🗂️ **Index control**: `buildIndices` / `freeIndices` on demand — you decide the memory footprint.
+- 🔁 **Mutable**: `add` / `update` / `removeWhere` / `clear` / `refresh` maintain the index incrementally — no full rebuild.
+- ⚙️ **Match modes**: `fuzzy` (default), `substring`, `prefix`, `word`; per-query `ignoreCase` / `mode` override; optional multi-core & incremental.
 
-## 安装
+## Platforms
+Android · iOS · macOS · Windows · Linux (native cross-compiled via cargokit). **Web/WASM**: the Rust side is
+WASM-compatible (`cargo check --target wasm32-unknown-unknown` passes; multi-core auto-degrades to single-threaded),
+and can be built via `flutter_rust_bridge_codegen build-web`.
+
+## Install
 ```yaml
 dependencies:
-  ffuzzy: ^0.1.0
+  ffuzzy: ^0.2.0
 ```
-执行 `flutter pub get`。入口库:`package:ffuzzy/ffuzzy.dart`(每个类都附可直接复制的示例)。
+Run `flutter pub get`. Entry library: `package:ffuzzy/ffuzzy.dart` (every class ships a copy-pasteable example).
 
-## 目录
-- [初始化 ffuzzy](#初始化-ffuzzy)
-- [快速上手](#快速上手)
-- [命名速查](#命名速查)
-- [核心概念:索引的建立与释放](#核心概念索引的建立与释放)
-- [增量更新与跨模块同步](#增量更新与跨模块同步)
+## Contents
+- [Initialize](#initialize)
+- [Quick start](#quick-start)
+- [Which class to use](#which-class-to-use)
+- [Core concept: building & freeing the index](#core-concept-building--freeing-the-index)
+- [Incremental updates & cross-module sync](#incremental-updates--cross-module-sync)
 - [FuzzyMatcher&lt;T&gt;](#fuzzymatchert)
 - [FuzzyStringMatcher](#fuzzystringmatcher)
-- [独立函数](#独立函数)
-- [数据类型](#数据类型)
-- [Flutter 完整示例(搜索框 + 高亮)](#flutter-完整示例搜索框--高亮)
-- [性能](#性能)
+- [Standalone functions](#standalone-functions)
+- [Data types](#data-types)
+- [Match modes](#match-modes)
+- [Full Flutter example (search box + highlight)](#full-flutter-example-search-box--highlight)
+- [Performance](#performance)
 
 ---
 
-## 初始化 ffuzzy
+## Initialize
 
-`ffuzzy.ensureInitialized()` **懒加载且幂等**,重复调用安全。
+`ffuzzy.ensureInitialized()` is **lazy and idempotent** — safe to call repeatedly.
 
 ```dart
 import 'package:ffuzzy/ffuzzy.dart';
 
 Future<void> main() async {
-  await ffuzzy.ensureInitialized(); // 也可在「真正用之前」再 await
+  await ffuzzy.ensureInitialized(); // or await it right before first use
   runApp(const MyApp());
 }
 ```
 
-> ⚠️ 同步方法(`match`/`buildIndices`/`fuzzyFilter` 等)要求初始化已完成。
-> 异步方法(`matchAsync`)内部会自动确保初始化。
+> ⚠️ Sync methods (`match` / `buildIndices` / `fuzzyFilter` …) require initialization to be complete.
+> Async methods (`matchAsync`) ensure initialization internally.
 
 ---
 
-## 快速上手
+## Quick start
 
 ```dart
 import 'package:ffuzzy/ffuzzy.dart';
 
 await ffuzzy.ensureInitialized();
 
-final matcher = FuzzyMatcher<Game>(games, (g) => g.name) // 用 name 投影
-  ..buildIndices();                                       // 显式建立索引
+final matcher = FuzzyMatcher<Game>(games, (g) => g.name) // project by name
+  ..buildIndices();                                       // build the index explicitly
 
 for (final out in matcher.match('drgn', limit: 20)) {
-  print('${out.obj.name}  分数=${out.score}  高亮=${out.indices}');
+  print('${out.obj.name}  score=${out.score}  highlight=${out.indices}');
 }
 
-final best = matcher.single('drgn'); // 最佳一条 -> FuzzyOutput<Game>?; 对象用 best?.obj
-matcher.dispose();                    // 用完销毁
+final best = matcher.single('drgn'); // best one -> FuzzyOutput<Game>?; object via best?.obj
+matcher.dispose();                    // destroy when done
 ```
 
 ---
 
-## 命名速查
+## Which class to use
 
-| 你的数据 | 用哪个类 | `match` 返回 | `single` 返回 |
+| Your data | Class | `match` returns | `single` returns |
 |---|---|---|---|
-| 对象 / Map(要返回对象) | `FuzzyMatcher<T>` | `List<FuzzyOutput<T>>`(`.obj` 取对象) | `FuzzyOutput<T>?` |
-| 纯字符串列表(要下标) | `FuzzyStringMatcher` | `List<FuzzyHit>`(`.index` 回指列表) | `FuzzyHit?` |
-| 只查一两次,不建索引 | 独立函数 `fuzzyFilter` / `fuzzyMatchIndices` | `List<FuzzyHit>` / `FuzzyMatch?` | — |
+| Objects / Maps (want the object back) | `FuzzyMatcher<T>` | `List<FuzzyOutput<T>>` (`.obj`) | `FuzzyOutput<T>?` |
+| Plain string list (want the index) | `FuzzyStringMatcher` | `List<FuzzyHit>` (`.index`) | `FuzzyHit?` |
+| One-off, no index | `fuzzyFilter` / `fuzzyMatchIndices` | `List<FuzzyHit>` / `FuzzyMatch?` | — |
 
-> 结果三类型只差第一个字段:`FuzzyOutput.obj`(对象)/ `FuzzyHit.index`(下标)/ `FuzzyMatch`(单串无定位);三者都有 `score` + `indices`。
-> `limit` 必须 ≥ 0(负数抛 `ArgumentError`);`limit: 0` 返回空。
+> The three result types differ only in the first field: `FuzzyOutput.obj` (object) / `FuzzyHit.index` (list index) / `FuzzyMatch` (single string, no locator); all three carry `score` + `indices`.
+> `limit` must be ≥ 0 (negative throws `ArgumentError`); `limit: 0` returns empty.
 
 ---
 
-## 核心概念:索引的建立与释放
+## Core concept: building & freeing the index
 
-索引是**可选的速度缓存**,由你显式控制何时占内存:
+The index is an **optional speed cache** — you control when it costs memory:
 
-- `match`/`matchAsync` **从不自动建/重建索引**:有索引就走索引(快);**无索引则退化为整表扫描**
-  (慢,但不分配持久索引、绝不偷偷把内存加回来)。要加速请显式 `buildIndices()`(已建则跳过)或 `refresh()`。
-- 所以「忘了 `buildIndices()`」不会崩溃,只是搜索变慢(等同 `indexed:false` / 独立函数的速度);
-  可用 `hasIndices` 自查当前是否处于高速模式。
+- `match` / `matchAsync` **never auto-build/rebuild**: with an index they use it (fast); **without one they fall back to a full scan**
+  (slow, but allocates no persistent index and never silently grows memory). Call `buildIndices()` (skips if present) or `refresh()` to go fast.
+- So "forgot to `buildIndices()`" never crashes — it just searches slower (same as `indexed:false` / standalone functions).
+  Check `hasIndices` to see whether you're in fast mode.
 
-```text
-创建实例(无索引,match 此时走慢速扫描)
-  └─ buildIndices()  → 建立索引,进入高速模式(已建则跳过)
-       └─ match / matchAsync / single → 搜索
-            ├─ freeIndices()           → 只释放 Rust 索引(Dart 侧源/投影保留);match 退化为扫描
-            └─ dispose()               → 两侧全释放并销毁实例,不可再用
-refresh(source) → 换数据源并【自动重建】索引(适合先占位、数据回来再喂入)
-```
-
-| 操作 | Rust 侧索引 | Dart 侧数据 | 之后 `match` |
+| Operation | Rust index | Dart data | `match` after |
 |---|---|---|---|
-| 仅创建 / `freeIndices()` | 无 | 保留 | 能(退化扫描,慢)|
-| `buildIndices()` | 建立 | 保留 | 能(快)|
-| `dispose()` | 释放 | 释放全部 | 否(抛 `StateError`,需重建实例)|
-| `refresh(src)` | 重建 | 替换为 src | 能(快)|
+| create only / `freeIndices()` | none | kept | yes (slow scan) |
+| `buildIndices()` | built | kept | yes (fast) |
+| `dispose()` | freed | all freed | no (throws `StateError`) |
+| `refresh(src)` | rebuilt | replaced | yes (fast) |
 
-> 有在飞的异步搜索时,`freeIndices`/`dispose` 会**先等其排空**再释放,绝不释放正被后台线程使用的索引。
+> If an async search is in flight, `freeIndices` / `dispose` **wait for it to drain** before freeing — never freeing an index a background thread is using.
+
+For large datasets, build the index off the UI thread with `await m.buildIndicesAsync()`.
 
 ---
 
-## 增量更新与跨模块同步
+## Incremental updates & cross-module sync
 
-**matcher 持有自己的数据快照,不会观察外部集合。** 也就是说:你先 `FuzzyMatcher(A)` 建好索引,之后在别处对 `A` 做 `A.add(x)`,**matcher 搜不到 `x`**——因为它不知道 A 变了。这是刻意的(否则跨模块就得让 matcher 去耦合/监听 A)。
+**A matcher holds its own snapshot; it does not observe external collections.** If you build `FuzzyMatcher(A)` and
+later do `A.add(x)` elsewhere, the matcher **won't find `x`** — it doesn't know A changed. This is intentional.
 
-正确做法:**谁改数据,谁把变更喂给 matcher**;matcher 提供增量接口,代价极小。
+The rule: **whoever changes the data feeds the change to the matcher**; the incremental API is cheap.
 
 ```dart
 final m = FuzzyMatcher<Game>(games, (g) => g.name)..buildIndices();
-// 增
-m.add(newGame);                         // 追加一条,直接进 Rust 索引,不重建
-m.addAll(moreGames);                    // 批量追加
-// 改
-m.update(0, editedGame);                // 替换下标 0 处对象
-// 删
-m.removeAt(2);                          // 按下标删
-final n = m.removeWhere((g) => g.disabled); // 按条件删,返回删除数
-// 清空
-m.clear();                              // 全清(实例保留)
-// 整体替换
-m.refresh(reloadedGames);               // 换源 + 重建
+m.add(newGame);                          // append one, straight into the Rust index, no rebuild
+m.addAll(moreGames);                     // batch append
+m.update(0, editedGame);                 // replace object at index 0
+m.removeAt(2);                           // remove by index
+final n = m.removeWhere((g) => g.disabled); // remove by predicate, returns count
+m.clear();                               // clear all (instance kept)
+m.refresh(reloadedGames);                // replace source + rebuild
 ```
 
-> `add` 只在末尾追加,不影响在飞搜索;`update`/`remove*`/`clear` 会改变下标/内容,因此会**丢弃在飞 `matchAsync` 结果**(返回空,由调用方按新状态重查)。`FuzzyStringMatcher` 同名方法签名把 `T` 换成 `String`。
-
-**A 与 matcher 不在同一模块时**,选一种接法(matcher 始终不依赖 A 的具体类型):
-
-1. **仓库/Service 持有两者(推荐)**:写一个 `GameRepo`,内部既存数据又持有 matcher,`repo.add(x)` 同时更新数据与 `matcher.add(x)`。两个模块都用 repo,matcher 不外泄。
-2. **可观察数据源**:让 A 暴露变更流(`Stream`/`ChangeNotifier`),在装配层 `a.changes.listen((c) => matcher.add(c.item))`。A 不认识 matcher,matcher 不认识 A,靠装配层粘合。
-3. **matcher 即数据源**:不再单独维护 A,所有增删走 matcher(`matcher.add` / `matcher.items` 读),最省心,但调用方需依赖 matcher。
-
-> 注意:`add` 是 `&mut` 操作,若此刻有**在飞的 `matchAsync`** 正在 Rust 端读索引,`add` 会等其结束(frb 用读写锁保护,不会数据竞争);大数据 + 长在飞搜索时偶有短暂阻塞。`add` 不影响已在飞结果(只在末尾追加,不改已有下标)。
+> `add` only appends and does not disturb in-flight searches; `update` / `remove*` / `clear` change indices/content, so they
+> **discard in-flight `matchAsync` results** (return empty; re-query on the new state). `FuzzyStringMatcher` has the same methods with `String`.
+> `add` is a `&mut` op: if a `matchAsync` is reading the Rust index right then, `add` waits for it (frb guards with a read-write lock — no data race); brief stalls only with huge data + long in-flight searches.
 
 ---
 
 ## FuzzyMatcher&lt;T&gt;
 
-对任意类型 `T` 建索引,`match` 直接返回命中的**对象**(`FuzzyOutput<T>`)。
+Indexes any type `T`; `match` returns the matched **objects** (`FuzzyOutput<T>`).
 
-### 创建
+### Create
 
 ```dart
-// 函数投影(最通用)
-final m1 = FuzzyMatcher<Game>(games, (g) => g.name);
-
-// 字段名投影(Map / JSON 数据)
-final m2 = FuzzyMatcher.key(jsonList, 'gameName');
-
-// 多字段一起搜
-final m3 = FuzzyMatcher<Game>(games, (g) => '${g.name} ${g.id}');
-
-// 省内存模式:不建常驻索引,每次临时处理
-final m4 = FuzzyMatcher<Game>(games, (g) => g.name, indexed: false);
-
-// 自定义配置(推荐在默认配置上 copyWith 只改要改的字段)
-final m5 = FuzzyMatcher<Game>(games, (g) => g.name,
+final m1 = FuzzyMatcher<Game>(games, (g) => g.name);          // function projection
+final m2 = FuzzyMatcher.key(jsonList, 'gameName');            // field-name projection (Map/JSON)
+final m3 = FuzzyMatcher<Game>(games, (g) => '${g.name} ${g.id}'); // multi-field
+final m4 = FuzzyMatcher<Game>(games, (g) => g.name, indexed: false); // no resident index
+final m5 = FuzzyMatcher<Game>(games, (g) => g.name,           // custom config (copyWith)
     config: kDefaultFuzzyConfig.copyWith(ignoreCase: false));
 ```
 
-### 搜索
+### Search
 
 ```dart
 final m = FuzzyMatcher<Game>(games, (g) => g.name)..buildIndices();
 
-// 同步:返回按分数降序的命中对象
-final List<FuzzyOutput<Game>> hits = m.match('dragon', limit: 20);
-for (final h in hits) {
-  print(h.obj);     // 命中的原始对象 (Game)
-  print(h.score);   // 匹配分
-  print(h.indices); // 命中字符下标(高亮用)
-}
+final List<FuzzyOutput<Game>> hits = m.match('dragon', limit: 20); // by score desc
+for (final h in hits) { print(h.obj); print(h.score); print(h.indices); }
 
-// 异步(后台线程,不阻塞 UI,超大数据集首选)
-final hitsAsync = await m.matchAsync('dragon', limit: 20);
+final hitsAsync = await m.matchAsync('dragon', limit: 20); // background thread
 
-// 取最佳一条(与 match 元素类型一致):无命中返回 null
 final FuzzyOutput<Game>? best = m.single('dragon');
 final Game? obj = best?.obj;
-final FuzzyOutput<Game>? bestAsync = await m.singleAsync('dragon');
+
+// per-query override of mode / ignoreCase
+final pre = m.match('dra', mode: MatchMode.prefix, ignoreCase: false);
 ```
 
-### 换源(占位 → 数据回来)
-
-```dart
-final m = FuzzyMatcher<Game>(const <Game>[], (g) => g.name); // 先占位
-final games = await api.fetchGames();  // 数据慢慢回来
-m.refresh(games);                      // 换源并自动重建索引
-m.match('dragon');
-```
-
-### 生命周期
+### Lifecycle
 
 ```dart
 final m = FuzzyMatcher.key(jsonList, 'gameName');
-m.hasIndices;             // false(尚未建)
-m.buildIndices();         // 建立
-m.match('gold');          // 快速搜索
-m.freeIndices();          // 空闲:只释放 Rust 索引(Dart 侧对象/投影保留)
-m.match('gold');          // 仍可搜,只是退化为慢速扫描(不会自动重建/加内存)
-m.buildIndices();         // 想再快:秒级重建(用保留的投影)
-m.dispose();              // 不再使用:两侧全释放
-m.isDisposed;             // true
-// m.match('x');          // ✗ dispose 后抛 StateError
+m.hasIndices;             // false
+m.buildIndices();         // build (or buildIndicesAsync() for big data)
+m.match('gold');          // fast
+m.freeIndices();          // free Rust index only (Dart source/projection kept)
+m.match('gold');          // still works, degraded to slow scan
+m.buildIndices();         // rebuild in ms (from kept projection)
+m.dispose();              // destroy both sides
 ```
 
-### 成员
+### Members
 
-| 成员 | 签名 | 说明 |
+| Member | Signature | Notes |
 |---|---|---|
-| 构造 | `FuzzyMatcher<T>(List<T> items, String Function(T) stringOf, {bool indexed = true, FuzzyConfig config = kDefaultFuzzyConfig, bool ignoreCaseIndices = false})` | `stringOf` 投影出可搜索串;`ignoreCaseIndices` 见下文 |
-| 构造 | `static FuzzyMatcher<Map<String,dynamic>> FuzzyMatcher.key(List<Map<String,dynamic>> items, String key, {bool indexed = true, FuzzyConfig config = kDefaultFuzzyConfig, bool ignoreCaseIndices = false})` | 按字段名搜索 |
-| `buildIndices` | `void buildIndices()` | 建立索引(已存在则跳过) |
-| `buildIndicesAsync` | `Future<void> buildIndicesAsync()` | 建索引异步版:Utf32 转换在后台线程,**不阻塞 UI**,适合大数据集(注:`stringOf` 投影仍在调用线程) |
-| `add` / `addAll` | `void add(T item)` / `void addAll(Iterable<T> items)` | 增:追加;已建索引则直接追加(不重建,O(追加量)) |
-| `update` | `void update(int index, T item)` | 改:替换下标处对象(重投影该条) |
-| `removeAt` / `removeWhere` | `void removeAt(int index)` / `int removeWhere(bool Function(T) test)` | 删:按下标 / 按条件;`removeWhere` 返回删除数 |
-| `clear` | `void clear()` | 清空全部(实例保留,可继续 add/refresh) |
-| `refresh` | `void refresh(List<T> source)` | 整体换源并自动重建 |
-| `match` | `List<FuzzyOutput<T>> match(String query, {int? limit, bool? ignoreCase, MatchMode? mode})` | 同步搜索;需先建索引。`ignoreCase`/`mode` 可按本次查询覆盖配置 |
-| `matchAsync` | `Future<List<FuzzyOutput<T>>> matchAsync(String query, {int? limit, bool? ignoreCase, MatchMode? mode})` | 异步搜索,不阻塞 UI;搜索期间若 `refresh`/`dispose`,本次结果丢弃返回空 |
-| `single` | `FuzzyOutput<T>? single(String query, {bool? ignoreCase, MatchMode? mode})` | 最佳一条(同 `match` 元素类型),无命中返回 null;对象用 `?.obj` |
-| `singleAsync` | `Future<FuzzyOutput<T>?> singleAsync(String query, {bool? ignoreCase, MatchMode? mode})` | `single` 异步版 |
-| `freeIndices` | `void freeIndices()` | 只释放 Rust 索引(Dart 侧源/投影保留,可秒级重建) |
-| `dispose` | `void dispose()` | 两侧全释放并销毁 |
-| `disposeAndWait` | `Future<void> disposeAndWait()` | 同 `dispose`,等在飞搜索排空后完成 |
-| `length` / `hasIndices` / `isDisposed` | `int` / `bool` / `bool` | 状态 |
+| ctor | `FuzzyMatcher<T>(List<T> items, String Function(T) stringOf, {bool indexed = true, FuzzyConfig config = kDefaultFuzzyConfig})` | `stringOf` projects a searchable string |
+| ctor | `static FuzzyMatcher<Map<String,dynamic>> FuzzyMatcher.key(List<Map<String,dynamic>> items, String key, {bool indexed = true, FuzzyConfig config = kDefaultFuzzyConfig})` | search by field name |
+| `buildIndices` | `void buildIndices()` | build (skips if present) |
+| `buildIndicesAsync` | `Future<void> buildIndicesAsync()` | build off the UI thread (Utf32 conversion on a worker; `stringOf` projection still on the caller) |
+| `add` / `addAll` | `void add(T)` / `void addAll(Iterable<T>)` | append; goes straight into the index (no rebuild) |
+| `update` | `void update(int index, T item)` | replace object at index |
+| `removeAt` / `removeWhere` | `void removeAt(int)` / `int removeWhere(bool Function(T))` | remove by index / predicate |
+| `clear` | `void clear()` | clear all (instance kept) |
+| `refresh` | `void refresh(List<T>)` | replace source + rebuild |
+| `match` | `List<FuzzyOutput<T>> match(String query, {int? limit, bool? ignoreCase, MatchMode? mode})` | sync; needs an index. `ignoreCase`/`mode` override per query |
+| `matchAsync` | `Future<List<FuzzyOutput<T>>> matchAsync(String query, {int? limit, bool? ignoreCase, MatchMode? mode})` | async; discards result if `refresh`/`dispose` happens meanwhile |
+| `single` / `singleAsync` | `FuzzyOutput<T>? single(String, {bool? ignoreCase, MatchMode? mode})` / async | best one, or null |
+| `freeIndices` | `void freeIndices()` | free Rust index only |
+| `dispose` / `disposeAndWait` | `void dispose()` / `Future<void> disposeAndWait()` | destroy both sides (the latter waits for in-flight) |
+| `length` / `hasIndices` / `isDisposed` | `int` / `bool` / `bool` | status |
 
 ---
 
 ## FuzzyStringMatcher
 
-面向 `List<String>`,`match` 返回带原列表下标的 `FuzzyHit`(想要下标而非对象时用)。
+For `List<String>`; `match` returns `FuzzyHit` carrying the original list index.
 
 ```dart
 await ffuzzy.ensureInitialized();
 final m = FuzzyStringMatcher(['alpha', 'beta', 'alphabet'])..buildIndices();
 
-final List<FuzzyHit> hits = m.match('alph', limit: 10);
-for (final h in hits) {
-  print(m.items[h.index]); // h.index 指回原列表
+for (final h in m.match('alph', limit: 10)) {
+  print(m.items[h.index]); // index back into the list
   print(h.score);
   print(h.indices);
 }
 
-final FuzzyHit? best = m.single('bet');       // -> FuzzyHit?; 文本用 m.items[best!.index]
-final more = await m.matchAsync('alph');      // 异步
-
-m.refresh(['gold', 'golden']);                // 换源并重建
-m.freeIndices();                              // 释放索引(可 buildIndices 重建)
-m.dispose();                                  // 销毁
-await m.disposeAndWait();                     // 等在飞搜索排空后完成
-
-// 省内存模式:无需 buildIndices,每次传整表
-final plain = FuzzyStringMatcher(['a', 'b'], indexed: false);
-plain.match('a');
+final FuzzyHit? best = m.single('bet');   // text via m.items[best!.index]
+m.refresh(['gold', 'golden']);
+m.dispose();
 ```
 
-### 成员
-
-与 `FuzzyMatcher` 同名方法语义一致(含 `buildIndices`/`freeIndices`/`dispose`/`disposeAndWait`、
-增删改清 `add`/`addAll`/`update`/`removeAt`/`removeWhere`/`clear`、`refresh`、`single`/`singleAsync`),
-差异仅在类型:`match`→`List<FuzzyHit>`、`single`→`FuzzyHit?`、`refresh`/`add` 等参数为 `String`。
-额外只读属性:`List<String> items`、`bool indexed`、`FuzzyConfig config`。
+Same methods as `FuzzyMatcher` (lifecycle, mutation, `refresh`, `single`/`singleAsync`); only the types differ
+(`match`→`List<FuzzyHit>`, args take `String`). Extra read-only props: `List<String> items`, `bool indexed`, `FuzzyConfig config`.
 
 ---
 
-## 独立函数
+## Standalone functions
 
-不建索引、只查一两次时用。**调用前需 `await ffuzzy.ensureInitialized()`**。
+For one-off queries without an index. **Call `await ffuzzy.ensureInitialized()` first.**
 
 ```dart
-await ffuzzy.ensureInitialized();
 const cfg = kDefaultFuzzyConfig;
-
-int? score = fuzzyMatch(query: 'dt', haystack: 'Dragon Treasure', config: cfg); // 不匹配为 null
-
+int? score = fuzzyMatch(query: 'dt', haystack: 'Dragon Treasure', config: cfg); // null if no match
 FuzzyMatch? m = fuzzyMatchIndices(query: 'dt', haystack: 'Dragon Treasure', config: cfg);
-print(m?.score); print(m?.indices);
-
 final hits = fuzzyFilter(query: 'drg', items: ['Dragon', 'Golden'], config: cfg, limit: 50);
 final hitsAsync = await fuzzyFilterAsync(query: 'drg', items: ['Dragon'], config: cfg);
 ```
 
-| 函数 | 签名 |
+| Function | Signature |
 |---|---|
 | `fuzzyMatch` | `int? fuzzyMatch({required String query, required String haystack, required FuzzyConfig config})` |
 | `fuzzyMatchIndices` | `FuzzyMatch? fuzzyMatchIndices({required String query, required String haystack, required FuzzyConfig config})` |
@@ -309,64 +252,45 @@ final hitsAsync = await fuzzyFilterAsync(query: 'drg', items: ['Dragon'], config
 
 ---
 
-## 数据类型
+## Data types
 
 ```dart
-// FuzzyMatcher.match / single 的结果
-class FuzzyOutput<T> {
-  final T obj;              // 命中的原始对象
-  final int score;          // 匹配分
-  final Uint32List indices; // 命中字符下标(高亮用)
-}
+class FuzzyOutput<T> { final T obj; final int score; final Uint32List indices; }       // FuzzyMatcher result
+class FuzzyHit       { final int index; final int score; final Uint32List indices; }    // FuzzyStringMatcher result
+class FuzzyMatch     { final int score; final Uint32List indices; }                     // single-string result
 
-// FuzzyStringMatcher.match / fuzzyFilter 的结果
-class FuzzyHit {
-  final int index;          // 指回原列表下标
-  final int score;
-  final Uint32List indices;
-}
-
-// fuzzyMatchIndices 的结果(单串)
-class FuzzyMatch {
-  final int score;
-  final Uint32List indices;
-}
-
-// 匹配配置(6 个字段;通常不直接写全,用 kDefaultFuzzyConfig.copyWith 只改要改的)
+// Match config (use kDefaultFuzzyConfig.copyWith to change just a field)
 const kDefaultFuzzyConfig = FuzzyConfig(
-  ignoreCase: true,      // 忽略大小写(也可 match(q, ignoreCase: ...) 按查询覆盖)
-  normalize: true,       // Unicode 归一化(仅 Fuzzy 生效)
-  preferPrefix: true,    // 前缀优先(仅 Fuzzy 排序)
-  mode: MatchMode.fuzzy, // 匹配模式(也可 match(q, mode: ...) 按查询覆盖)
-  parallel: true,        // 大数据 Fuzzy 搜索自动多核(候选 > 2 万触发;简单模式/小数据/web 单线程)
-  incremental: false,    // 增量缓存(仅 Fuzzy + FuzzyCorpus;逐字输入可开)
+  ignoreCase: true,      // case-insensitive (also overridable per query: match(q, ignoreCase: ...))
+  normalize: true,       // Unicode normalization (Fuzzy mode only)
+  preferPrefix: true,    // prefix-first ranking (Fuzzy mode only)
+  mode: MatchMode.fuzzy, // match mode (also overridable per query: match(q, mode: ...))
+  parallel: true,        // multi-core for big Fuzzy searches (kicks in above ~20k candidates; serial otherwise/web)
+  incremental: false,    // incremental cache (Fuzzy + FuzzyCorpus only; good for type-as-you-go on web/low-core)
 );
 
-// 推荐:在默认配置上只改个别字段(扩展方法 copyWith)
 final c = kDefaultFuzzyConfig.copyWith(mode: MatchMode.substring);
 ```
 
-### 匹配模式 MatchMode
+### Match modes
 
-| 模式 | 含义 | 速度(相对 fuzzy,实测大数据) |
+| Mode | Meaning | Typical use |
 |---|---|---|
-| `fuzzy`(默认) | 子序列模糊 + 打分排序(容错、空格分词可乱序) | 1× |
-| `substring` | 子串包含(`contains`) | ~5× |
-| `prefix` | 前缀(`startsWith`) | ~20× |
-| `word` | **整串完全相等**(equals,**不是**词边界匹配) | ~40× |
+| `fuzzy` (default) | subsequence fuzzy + scored ranking (typo-tolerant; space-separated terms match in any order) | command palette, typo-tolerant search |
+| `substring` | contains (`contains`) | "contains" filter |
+| `prefix` | starts-with (`startsWith`) | autocomplete, prefix filter |
+| `word` | **whole-string equality** (equals — **not** word-boundary matching) | exact match / lookup |
 
-- **`mode` / `ignoreCase` 可按查询覆盖**:`m.match(q, mode: MatchMode.prefix, ignoreCase: false)`。同一个 matcher 不同查询切模式无需重建。
-- 简单模式(substring/prefix/word)按**原序**返回、不排序、命中满 `limit` 即停。
-- `parallel` / `incremental` 是 matcher 级策略(构造时经 `config` 定),不在 `match` 参数里:`incremental` 依赖"连续查询是上次前缀扩展"的状态,逐字输入搜索框时开启可加速(仅 `fuzzy` + `FuzzyCorpus` 生效)。
-- **大数据集首次建索引用 `await m.buildIndicesAsync()`** 避免卡 UI。
-- 大小写不敏感(`ignoreCase: true`)的**简单模式**想走快路径,构造传 `ignoreCaseIndices: true`(额外常驻一份小写索引,约 2× 简单索引内存);否则该路径会临时折叠、较慢。
-- `ignoreCase`(匹不匹得上)与 `ignoreCaseIndices`(大小写不敏感时快不快)是两回事,别混淆。
+- **`mode` / `ignoreCase` are per-query overridable**: `m.match(q, mode: MatchMode.prefix, ignoreCase: false)`. No rebuild needed to switch modes on the same matcher.
+- Simple modes (substring/prefix/word) return in **original order**, unranked, and stop once `limit` is reached.
+- `parallel` / `incremental` are matcher-level (set via `config`), not per-query: `incremental` depends on "the next query extends the last", so it shines for type-as-you-go (`fuzzy` + `FuzzyCorpus` only).
+- See [Performance](#performance) for measured gains.
 
 ---
 
-## Flutter 完整示例(搜索框 + 高亮)
+## Full Flutter example (search box + highlight)
 
-可直接复制运行:输入实时模糊筛选并高亮命中字符。
+Copy-paste runnable: live fuzzy filtering with highlighted matched characters.
 
 ```dart
 import 'dart:typed_data';
@@ -388,27 +312,21 @@ class _SearchDemoState extends State<SearchDemo> {
   static const _items = ['Dragon Treasure', 'Golden Fortune', 'Super Gems 1000', 'Lucky Dragon'];
   late final FuzzyStringMatcher _matcher = FuzzyStringMatcher(_items)..buildIndices();
   List<FuzzyHit> _hits = const [];
+  int _token = 0; // anti-race: only accept the latest query's result
 
   @override
-  void dispose() {
-    _matcher.dispose();
-    super.dispose();
-  }
-
-  int _token = 0; // 防竞态:只接受最新一次查询的结果
+  void dispose() { _matcher.dispose(); super.dispose(); }
 
   Future<void> _onChanged(String q) async {
     final token = ++_token;
     if (q.isEmpty) {
       setState(() => _hits = [
-            for (int i = 0; i < _items.length; i++)
-              FuzzyHit(index: i, score: 0, indices: Uint32List(0)),
-          ]);
+        for (int i = 0; i < _items.length; i++) FuzzyHit(index: i, score: 0, indices: Uint32List(0)),
+      ]);
       return;
     }
-    // 异步搜索:在后台线程跑,不阻塞 UI。大数据/连打字务必用 matchAsync。
-    final hits = await _matcher.matchAsync(q, limit: 50);
-    if (!mounted || token != _token) return; // 过期结果丢弃,避免列表闪回旧值
+    final hits = await _matcher.matchAsync(q, limit: 50); // background thread, never blocks UI
+    if (!mounted || token != _token) return;              // drop stale results
     setState(() => _hits = hits);
   }
 
@@ -420,7 +338,7 @@ class _SearchDemoState extends State<SearchDemo> {
         Padding(
           padding: const EdgeInsets.all(12),
           child: TextField(autofocus: true, onChanged: _onChanged,
-              decoration: const InputDecoration(border: OutlineInputBorder(), hintText: '输入模糊查询')),
+              decoration: const InputDecoration(border: OutlineInputBorder(), hintText: 'fuzzy query')),
         ),
         Expanded(
           child: ListView.builder(
@@ -429,8 +347,8 @@ class _SearchDemoState extends State<SearchDemo> {
               final hit = _hits[i];
               final text = _items[hit.index];
               final matched = hit.indices.toSet();
-              // indices 是「字符(rune)下标」,高亮务必按 runes 切分,
-              // 直接用 text[c]/UTF-16 索引会让 emoji 等非 BMP 字符错位。
+              // indices are CHARACTER (rune) indices — split by runes when highlighting;
+              // using text[c] / UTF-16 indexing would misalign emoji and other non-BMP chars.
               final runes = text.runes.toList();
               return ListTile(
                 title: Text.rich(TextSpan(children: [
@@ -453,43 +371,57 @@ class _SearchDemoState extends State<SearchDemo> {
 }
 ```
 
-> 上例用 `matchAsync` + `_token` 版本号,这是搜索框的推荐写法:不阻塞 UI、且丢弃过期结果避免闪烁。
-> 小数据(几千条)用同步 `match` 也无妨。**高亮按 `runes` 切分**(`indices` 是字符下标,非 UTF-16 码元)。
+> The example uses `matchAsync` + a `_token` version, the recommended pattern for a search box: non-blocking and drops stale results.
+> Small datasets (a few thousand) are fine with sync `match`. **Highlight by `runes`** (`indices` are character indices, not UTF-16 code units).
 
 ---
 
-## 性能
+## Performance
 
-488,600 条数据实测(Windows x86_64,release):
+### vs other Dart fuzzy libraries (488,600 items, Windows x86_64 release)
 
-| 库 | 每查询耗时 | 相对 ffuzzy |
+| Library | Per-query | vs ffuzzy |
 |---|---:|---:|
-| **ffuzzy(缓存)** | **~17 ms** | **1×** |
-| string_similarity | ~755 ms | 45× |
-| fuzzy_bolt | ~1276 ms | 76× |
-| fuzzy (Fuse) | ~1585 ms | 94× |
-| fuzzywuzzy | ~5066 ms | 301× |
+| **ffuzzy (cached)** | **~3 ms** (parallel) | **1×** |
+| string_similarity | ~755 ms | ~250× |
+| fuzzy_bolt | ~1276 ms | ~420× |
+| fuzzy (Fuse) | ~1585 ms | ~520× |
+| fuzzywuzzy | ~5066 ms | ~1600× |
 
-常驻索引约 35MB(48.8 万条)。数据量小(数千级)时索引常驻即可、内存极小;大数据吃紧时用
-`freeIndices()` 空闲释放、`buildIndices()`/`refresh()` 恢复。
+> `nucleo` is subsequence fuzzy (fzf-style), solving a different problem than edit-distance/Dice libraries; the table compares throughput of "similar feature, different implementation" — match sets are not strictly equivalent.
 
-> 算法说明:`nucleo` 是子序列模糊匹配(fzf 式),与编辑距离/Dice 类库(fuzzywuzzy / string_similarity)
-> 解决的问题不同;上表为「同类功能、不同实现」的吞吐对比,命中集合不完全等价。
+### Effect of each API / switch on speed & memory (488,600 items, same machine)
+
+One-time: `buildIndices` ~120ms; resident Utf32 index ~35MB (488k). Baseline = default Fuzzy + parallel, ~2.9ms/query.
+
+| API / switch | Default | Effect | Measured gain | Memory / cost |
+|---|---|---|---:|---|
+| `parallel` (multi-core) | on | chunked multi-core for big Fuzzy search (>20k candidates) | **6.3×** (18.1→2.9ms) | momentary multi-core during search only; threads = cores−2 (leaves UI headroom), ≤3 cores → serial |
+| `mode: prefix` | — | prefix (vs parallel fuzzy) | **3.5×** (→0.85ms) | none |
+| `mode: word` | — | whole-string equality (vs parallel fuzzy) | **2.3×** (→1.30ms) | none |
+| `mode: substring` | — | contains (vs parallel fuzzy; vs **serial** fuzzy ~6×) | ~1.0× (→2.9ms) | none |
+| `incremental` (**serial**/web/low-core) | off | type-as-you-go rescans only the last hit set | **2.2×** (7 keystrokes 117→53ms) | caches last hit indices (≤20k u32) |
+| `incremental` (multi-core) | off | parallel is already fast; incremental ~neutral | ~1.0× (never slower) | same |
+| `ignoreCase` simple modes (lazy fold cache) | auto | first query builds a lowercase copy, then reuses | **13×** after first (39→3ms) | one lowercase copy (≈ source size, built lazily on first query; invalidated on mutate/free) |
+| `buildIndicesAsync()` | — | move index build to a worker thread | no speedup but **never blocks UI** | same total time as sync build |
+
+Highlights:
+- **Multi-core is the biggest lever for big Fuzzy data (6×+)** — automatic on desktop / multi-core Android.
+- **Simple modes (prefix/word/substring)** run single-threaded; at large scale their edge over *parallel* fuzzy narrows (substring ~1×), but they offer semantics fuzzy can't (prefix/equals/contains), and the edge is larger on small data or serial (web).
+- **`incremental` is for web/WASM/low-core** type-as-you-go: where multi-core can't help, it gives ~2×; on multi-core it's neutral and never slower (opt-in, default off).
+- **`ignoreCase` simple modes** lazily build a lowercase copy on first query (~40ms one-time @488k); steady state then matches the case-sensitive path.
+
+> Tight on memory: `freeIndices()` releases the Rust index when idle; `buildIndices()` / `refresh()` restore in ms (Dart source is kept).
 
 ---
 
-## 开发
+## Development
 
 ```bash
-# 在插件根目录
-flutter test                       # 运行 Dart 测试
-cargo test --manifest-path rust/Cargo.toml   # 运行 Rust 单测
-
-# 运行示例 App
-cd example && flutter run -d <device>
-
-# 修改 Rust 后重新生成绑定
-flutter_rust_bridge_codegen generate
+flutter test                                  # Dart tests
+cargo test --manifest-path rust/Cargo.toml    # Rust unit tests
+cd example && flutter run -d <device>         # run the example app
+flutter_rust_bridge_codegen generate          # regenerate bindings after editing Rust
 ```
 
-首次构建会自动通过 cargokit 交叉编译 Rust;需安装 Rust 工具链与对应平台的 target。
+The first build cross-compiles Rust automatically via cargokit; you need the Rust toolchain and the target's platform toolchain installed.
