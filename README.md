@@ -16,9 +16,13 @@ fzf-style subsequence matching, **~250–1600× faster** than common pure-Dart f
 - ⚙️ **Match modes**: `fuzzy` (default), `substring`, `prefix`, `word`; per-query `ignoreCase` / `mode` override; optional multi-core & incremental.
 
 ## Platforms
-Android · iOS · macOS · Windows · Linux (native cross-compiled via cargokit). **Web/WASM**: the Rust side is
-WASM-compatible (`cargo check --target wasm32-unknown-unknown` passes; multi-core auto-degrades to single-threaded),
-and can be built via `flutter_rust_bridge_codegen build-web`.
+Android · iOS · macOS · Windows · Linux (native cross-compiled via cargokit).
+
+**Web/WASM: supported but not recommended for production.** The Rust side is WASM-compatible (multi-core auto-degrades
+to single-threaded) and the example can be built on Linux via the `Web Build (WASM)` GitHub Actions workflow
+(`flutter_rust_bridge_codegen build-web`). But the **wasm payload is large** (~450KB+ before extra optimization), so on
+web a lighter pure-Dart library is usually the better trade — ffuzzy's sweet spot is native (Android/iOS/desktop).
+(build-web must run on Linux/CI: on Windows frb cannot spawn the `flutter`/`dart` `.bat` wrappers.)
 
 ## Install
 ```yaml

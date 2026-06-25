@@ -16,7 +16,9 @@ fzf 式子序列匹配。十万级数据下比常见纯 Dart 模糊库快 **45�
 - ⚙️ **可配置**:忽略大小写、Unicode 归一化、前缀优先(已规避 nucleo issue #92)。
 
 ## 支持平台
-Android · iOS · macOS · Windows · Linux(均为 cargokit 原生交叉编译)。Web/WASM:Rust 侧已兼容(`cargo check --target wasm32-unknown-unknown` 通过,多核自动退化为串行),可经 `flutter_rust_bridge_codegen build-web` 编出 wasm 使用。
+Android · iOS · macOS · Windows · Linux(均为 cargokit 原生交叉编译)。
+
+**Web/WASM:支持,但不建议生产使用。** Rust 侧已兼容(多核自动退化为串行),可在 Linux 上经 `Web Build (WASM)` GitHub Actions 工作流(`flutter_rust_bridge_codegen build-web`)编出 example 的 web 产物。但 **wasm 体积较大**(未进一步优化约 450KB+),web 上通常更适合用轻量的纯 Dart 库;ffuzzy 的强项在原生(Android/iOS/桌面)。(build-web 必须在 Linux/CI 跑:Windows 上 frb 无法 spawn `flutter`/`dart` 的 `.bat`。)
 
 ## 安装
 ```yaml
