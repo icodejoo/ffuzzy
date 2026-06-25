@@ -110,6 +110,13 @@ cd example && flutter run -d <device>            # 或 flutter build windows --r
 - **预编译 CI**:`.github/workflows/precompile_binaries.yml` 手动触发(workflow_dispatch),串行 matrix。
   Android 没有独立 runner,**挂在 ubuntu 上用 NDK 交叉编译**(`--android-sdk-location=$ANDROID_SDK_ROOT
   --android-ndk-version=...`);iOS 必须 macОС、Windows 必须 windows。需先在仓库 Settings 配好 Secret `PRIVATE_KEY`。
+- **Linux ARM64 / RISC-V 交叉编译**:cargokit 在 Linux 上默认只编宿主架构(`buildableTargets` 不跨架构)。
+  要补 `aarch64-unknown-linux-gnu` / `riscv64gc-unknown-linux-gnu`,**传 `--glibc-version` 触发 `cargo zigbuild`**
+  (zig 当交叉链接器)。cargokit 会自动 `cargo install cargo-zigbuild`,但 **zig 本身要在工作流里单独装**
+  (`mlugg/setup-zig@v2`)。glibc 取 **2.28**(riscv64 需 ≥2.27)。同时 zigbuild 钉死低 glibc 下限、提升可移植性。
+  这些产物追加到**同一个** `precompiled_<hash>` Release(hash 只由源码定,不受 `--target`/`--glibc-version` 影响)。
+  注:现有 `x86_64-unknown-linux-gnu` 是在 ubuntu runner 原生编的(glibc 较高);如需统一低 glibc,
+  删掉该 Release 里的 x86_64 资产后用 zigbuild 重编即可。
 - **本机网络会 RST 大块 git 上传**:`git push` 整包(几百 KB 一次)会在 `send-pack: unexpected disconnect
   while reading sideband packet` 处断开,但**放行小推送**。解法:把改动拆成多个小提交逐个推,且**用远程 sha
   与本地 HEAD 比对确认真·成功**(`git ls-remote origin -h refs/heads/main`),不要只看命令退出码——曾误报成功。
