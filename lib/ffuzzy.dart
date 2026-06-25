@@ -43,6 +43,8 @@ const FuzzyConfig kDefaultFuzzyConfig = FuzzyConfig(
   normalize: true,
   preferPrefix: true,
   mode: MatchMode.fuzzy,
+  parallel: true,
+  incremental: false,
 );
 
 /// 插件入口:初始化收口。
@@ -112,6 +114,10 @@ abstract class _IndexedMatcher {
   /// dispose 时清理 Dart 侧全部数据引用。
   void _disposeData();
 
+  /// 索引建好后的钩子:Rust 已独占索引,子类可释放仅用于建索引的 Dart 侧投影缓存
+  /// (需要时再从源/对象重投影)。默认空操作。
+  void _onIndexBuilt() {}
+
   /// 索引是否已建立(高速模式)。
   bool get hasIndices => indexed && _corpus != null && !_freeWhenIdle;
 
@@ -130,6 +136,7 @@ abstract class _IndexedMatcher {
     }
     _freeWhenIdle = false;
     _corpus = FuzzyCorpus(items: hs, ignoreCaseIndices: ignoreCaseIndices);
+    _onIndexBuilt();
   }
 
   /// [buildIndices] 的异步版本:Utf32 转换在 frb worker 线程执行,**不阻塞 UI**,适合大数据集。
@@ -154,6 +161,7 @@ abstract class _IndexedMatcher {
     }
     _freeWhenIdle = false;
     _corpus = corpus;
+    _onIndexBuilt();
   }
 
   /// 只释放 Rust 侧索引(Dart 侧源/投影保留,`buildIndices` 可秒级重建)。
@@ -265,6 +273,7 @@ abstract class _IndexedMatcher {
     // 有在飞搜索时,旧 corpus 由 Rust Arc 持有至其结束、之后 GC 回收;这里直接换新引用。
     _corpus = FuzzyCorpus(items: hs, ignoreCaseIndices: ignoreCaseIndices);
     _freeWhenIdle = false;
+    _onIndexBuilt();
   }
 
   void _onIdle() {
@@ -458,12 +467,17 @@ class FuzzyMatcher<T> extends _IndexedMatcher {
     return _projected ??= <String>[for (final o in objs) _stringOf(o)];
   }
 
-  // 投影缓存随实例存亡(相对对象很小);dispose 时连对象一起丢。
+  // 投影缓存仅在「未建索引」时存活;建好索引后由 Rust 独占,Dart 侧释放(见 _onIndexBuilt)。
   @override
   void _disposeData() {
     _objs = null;
     _projected = null;
   }
+
+  // C: 索引建好后释放 Dart 侧投影缓存(Rust 已独占)。需要时(fallback/重建)由 _haystacks
+  // 从对象重新投影。对象 _objs 始终保留(结果 index->对象 映射、refresh 都要它)。
+  @override
+  void _onIndexBuilt() => _projected = null;
 
   /// 候选数量。
   int get length => _objs?.length ?? 0;
@@ -579,11 +593,15 @@ extension FuzzyConfigCopyWith on FuzzyConfig {
     bool? normalize,
     bool? preferPrefix,
     MatchMode? mode,
+    bool? parallel,
+    bool? incremental,
   }) =>
       FuzzyConfig(
         ignoreCase: ignoreCase ?? this.ignoreCase,
         normalize: normalize ?? this.normalize,
         preferPrefix: preferPrefix ?? this.preferPrefix,
         mode: mode ?? this.mode,
+        parallel: parallel ?? this.parallel,
+        incremental: incremental ?? this.incremental,
       );
 }

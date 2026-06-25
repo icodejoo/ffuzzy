@@ -41,6 +41,13 @@ pub struct FuzzyConfig {
     pub prefer_prefix: bool,
     /// 匹配模式。
     pub mode: MatchMode,
+    /// 是否允许多核并行（仅 `Fuzzy` 搜索；按候选数阈值自动决定，小数据/简单模式/web 仍单线程）。
+    /// 建索引的 Utf32 转换始终按数据量自动并行（一次性、纯提速，不受此开关影响）。
+    pub parallel: bool,
+    /// 是否启用增量搜索缓存（仅 `FuzzyCorpus` + `Fuzzy` 模式生效）：当本次查询是上次查询的
+    /// **追加扩展**（前缀，同 ignore_case/normalize）时，只在上次命中集内重扫（命中单调收缩）。
+    /// 任何增删改/free 都会清缓存。默认 false。
+    pub incremental: bool,
 }
 
 impl Default for FuzzyConfig {
@@ -50,8 +57,26 @@ impl Default for FuzzyConfig {
             normalize: true,
             prefer_prefix: true,
             mode: MatchMode::Fuzzy,
+            parallel: true,
+            incremental: false,
         }
     }
+}
+
+/// 并行阈值：候选数 >= 此值才考虑多核（小数据并行开销不划算）。
+const PARALLEL_THRESHOLD: usize = 20_000;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn num_threads(len: usize) -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    cores.min(8).max(1).min(len.max(1))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn should_parallel(cfg: &FuzzyConfig, len: usize) -> bool {
+    cfg.parallel && len >= PARALLEL_THRESHOLD && num_threads(len) > 1
 }
 
 /// 便捷构造默认配置，供 Dart 侧直接调用。
@@ -196,13 +221,8 @@ fn indices_one(pattern: &Pattern, matcher: &mut Matcher, hay: Utf32Str, buf: &mu
     buf.clone()
 }
 
-/// 在一组已转好的 Utf32 候选上做 Fuzzy 两趟过滤。
-fn fuzzy_rank_haystacks(
-    haystacks: &[Utf32String],
-    query: &str,
-    cfg: &FuzzyConfig,
-    limit: Option<u32>,
-) -> Vec<FuzzyHit> {
+/// 第一趟扫描（串行）：对每条候选打分，返回 `Scored`。
+fn scan_haystacks_serial(haystacks: &[Utf32String], query: &str, cfg: &FuzzyConfig) -> Vec<Scored> {
     let mut matcher = make_matcher();
     let pattern = make_pattern(query, cfg);
     let mut buf = Vec::new();
@@ -218,10 +238,111 @@ fn fuzzy_rank_haystacks(
             });
         }
     }
+    scored
+}
+
+/// 第一趟扫描（多核）：分块、每线程独立 `Matcher`/`Pattern`，结果按全局下标合并。
+/// 归并后由 `rank_scored` 用同一比较器排序，结果与串行**完全一致**（确定性）。
+#[cfg(not(target_arch = "wasm32"))]
+fn scan_haystacks_parallel(
+    haystacks: &[Utf32String],
+    query: &str,
+    cfg: &FuzzyConfig,
+) -> Vec<Scored> {
+    let nthreads = num_threads(haystacks.len());
+    let chunk = (haystacks.len() + nthreads - 1) / nthreads;
+    std::thread::scope(|s| {
+        let handles: Vec<_> = haystacks
+            .chunks(chunk)
+            .enumerate()
+            .map(|(ci, slice)| {
+                let base = ci * chunk;
+                s.spawn(move || {
+                    let mut matcher = make_matcher();
+                    let pattern = make_pattern(query, cfg);
+                    let mut buf = Vec::new();
+                    let mut out = Vec::new();
+                    for (j, hay) in slice.iter().enumerate() {
+                        if let Some((score, is_prefix)) = scan_one(
+                            &pattern,
+                            &mut matcher,
+                            hay.slice(..),
+                            cfg.prefer_prefix,
+                            &mut buf,
+                        ) {
+                            out.push(Scored {
+                                index: (base + j) as u32,
+                                score,
+                                is_prefix,
+                            });
+                        }
+                    }
+                    out
+                })
+            })
+            .collect();
+        let mut all = Vec::new();
+        for h in handles {
+            all.extend(h.join().unwrap());
+        }
+        all
+    })
+}
+
+/// 第一趟扫描分流：大数据 + 开启并行 → 多核；否则串行。wasm 恒走串行。
+fn scan_haystacks(haystacks: &[Utf32String], query: &str, cfg: &FuzzyConfig) -> Vec<Scored> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if should_parallel(cfg, haystacks.len()) {
+        return scan_haystacks_parallel(haystacks, query, cfg);
+    }
+    scan_haystacks_serial(haystacks, query, cfg)
+}
+
+/// 增量复用：只扫上次命中集 `subset` 中的候选（串行；子集通常已较小）。
+fn scan_subset(
+    haystacks: &[Utf32String],
+    subset: &[u32],
+    query: &str,
+    cfg: &FuzzyConfig,
+) -> Vec<Scored> {
+    let mut matcher = make_matcher();
+    let pattern = make_pattern(query, cfg);
+    let mut buf = Vec::new();
+    let mut out = Vec::new();
+    for &idx in subset {
+        let i = idx as usize;
+        if i >= haystacks.len() {
+            continue; // 理论上 mutation 已清缓存，这里再兜一层底
+        }
+        if let Some((score, is_prefix)) =
+            scan_one(&pattern, &mut matcher, haystacks[i].slice(..), cfg.prefer_prefix, &mut buf)
+        {
+            out.push(Scored {
+                index: idx,
+                score,
+                is_prefix,
+            });
+        }
+    }
+    out
+}
+
+/// 第二趟：排序 + 截断 + 只对 top-N 回溯高亮下标（量小，串行）。
+fn finish_fuzzy(
+    haystacks: &[Utf32String],
+    scored: Vec<Scored>,
+    query: &str,
+    cfg: &FuzzyConfig,
+    limit: Option<u32>,
+) -> Vec<FuzzyHit> {
     let top = rank_scored(scored, cfg.prefer_prefix, limit);
+    let mut matcher = make_matcher();
+    let pattern = make_pattern(query, cfg);
+    let mut buf = Vec::new();
     top.into_iter()
         .map(|s| {
-            let indices = indices_one(&pattern, &mut matcher, haystacks[s.index as usize].slice(..), &mut buf);
+            let indices =
+                indices_one(&pattern, &mut matcher, haystacks[s.index as usize].slice(..), &mut buf);
             FuzzyHit {
                 index: s.index,
                 score: s.score,
@@ -362,20 +483,55 @@ pub fn fuzzy_filter_async(
 
 /// 缓存语料的模糊匹配器：候选常驻 Rust 侧，调用只跨 FFI 传查询串。
 /// `Fuzzy` 用预转换的 Utf32 索引；简单/子序列模式用源字符串（可选常驻折叠副本加速 ignore_case）。
+/// 增量搜索缓存：上次 Fuzzy 查询及其**全部命中下标**（非 top-N）。
+struct IncrCache {
+    query: String,
+    ignore_case: bool,
+    normalize: bool,
+    hits: Vec<u32>,
+}
+
 #[frb(opaque)]
 pub struct FuzzyCorpus {
     /// 源字符串（原样）。
     items: Vec<String>,
     /// 预转换的 Utf32 索引（`Fuzzy` 用）；`free` 后为 `None`。
     haystacks: Option<Vec<Utf32String>>,
-    /// 可选的折叠（小写）副本：构造时 `ignore_case_indices=true` 才建，让简单/子序列模式在
+    /// 可选的折叠（小写）副本：构造时 `ignore_case_indices=true` 才建，让简单模式在
     /// `ignore_case=true` 时走快路径；`free` 后为 `None`。
     folded: Option<Vec<String>>,
     /// 是否启用折叠副本（决定 rehydrate 时是否重建）。
     keep_folded: bool,
+    /// 增量搜索缓存（`Mutex` 因 `filter` 是 `&self` 且异步在 worker 线程跑）。
+    /// 任何增删改/free 都会清空。
+    incr: std::sync::Mutex<Option<IncrCache>>,
 }
 
 fn build_haystacks(items: &[String]) -> Vec<Utf32String> {
+    // 大数据自动多核转换（一次性、纯提速、保序）。
+    #[cfg(not(target_arch = "wasm32"))]
+    if items.len() >= PARALLEL_THRESHOLD && num_threads(items.len()) > 1 {
+        let nthreads = num_threads(items.len());
+        let chunk = (items.len() + nthreads - 1) / nthreads;
+        return std::thread::scope(|s| {
+            let handles: Vec<_> = items
+                .chunks(chunk)
+                .map(|slice| {
+                    s.spawn(move || {
+                        slice
+                            .iter()
+                            .map(|x| Utf32String::from(x.as_str()))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            let mut out = Vec::with_capacity(items.len());
+            for h in handles {
+                out.extend(h.join().unwrap());
+            }
+            out
+        });
+    }
     items.iter().map(|s| Utf32String::from(s.as_str())).collect()
 }
 
@@ -404,6 +560,14 @@ impl FuzzyCorpus {
             haystacks,
             folded,
             keep_folded: ignore_case_indices,
+            incr: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// 清空增量缓存（任何结构性变更后调用）。
+    fn clear_incr(&self) {
+        if let Ok(mut g) = self.incr.lock() {
+            *g = None;
         }
     }
 
@@ -423,6 +587,7 @@ impl FuzzyCorpus {
             fd.extend(items.iter().map(|s| s.to_lowercase()));
         }
         self.items.extend(items);
+        self.clear_incr();
     }
 
     /// 替换指定下标（越界忽略）。
@@ -439,6 +604,7 @@ impl FuzzyCorpus {
             fd[i] = item.to_lowercase();
         }
         self.items[i] = item;
+        self.clear_incr();
     }
 
     /// 批量按下标删除（内部降序去重）。
@@ -458,6 +624,7 @@ impl FuzzyCorpus {
                 }
             }
         }
+        self.clear_incr();
     }
 
     /// 清空全部候选（保留实例与驻留状态）。
@@ -470,6 +637,7 @@ impl FuzzyCorpus {
         if let Some(fd) = self.folded.as_mut() {
             fd.clear();
         }
+        self.clear_incr();
     }
 
     #[frb(sync)]
@@ -492,6 +660,7 @@ impl FuzzyCorpus {
     pub fn free(&mut self) {
         self.haystacks = None;
         self.folded = None;
+        self.clear_incr();
     }
 
     /// 从源字符串重建 Utf32 索引（及折叠副本，若启用）。无跨 FFI 编组开销。幂等。
@@ -527,6 +696,46 @@ impl FuzzyCorpus {
         nonfuzzy_filter(source, &q, cfg.mode, limit)
     }
 
+    /// Fuzzy 过滤（已驻留 Utf32）：支持增量复用（仅 `incremental=true` 且本次是上次的追加扩展）。
+    fn fuzzy_filter_hydrated(
+        &self,
+        haystacks: &[Utf32String],
+        query: &str,
+        cfg: &FuzzyConfig,
+        limit: Option<u32>,
+    ) -> Vec<FuzzyHit> {
+        if !cfg.incremental {
+            let scored = scan_haystacks(haystacks, query, cfg);
+            return finish_fuzzy(haystacks, scored, query, cfg, limit);
+        }
+        // 读缓存：能复用则取上次命中集（短暂持锁、克隆后即释放，避免阻塞并发 filterAsync）。
+        let subset: Option<Vec<u32>> = {
+            let g = self.incr.lock().unwrap();
+            g.as_ref().and_then(|c| {
+                let reusable = c.ignore_case == cfg.ignore_case
+                    && c.normalize == cfg.normalize
+                    && !c.query.is_empty()
+                    && query.starts_with(&c.query);
+                reusable.then(|| c.hits.clone())
+            })
+        };
+        let scored = match subset {
+            Some(hits) => scan_subset(haystacks, &hits, query, cfg),
+            None => scan_haystacks(haystacks, query, cfg),
+        };
+        // 写缓存：记录本次**全部命中**下标（非 top-N），供下次追加扩展复用。
+        {
+            let mut g = self.incr.lock().unwrap();
+            *g = Some(IncrCache {
+                query: query.to_string(),
+                ignore_case: cfg.ignore_case,
+                normalize: cfg.normalize,
+                hits: scored.iter().map(|s| s.index).collect(),
+            });
+        }
+        finish_fuzzy(haystacks, scored, query, cfg, limit)
+    }
+
     /// 过滤已缓存的语料。`Fuzzy` 按分数降序；其余按原序。
     #[frb(sync)]
     pub fn filter(&self, query: String, config: FuzzyConfig, limit: Option<u32>) -> Vec<FuzzyHit> {
@@ -534,7 +743,7 @@ impl FuzzyCorpus {
             return self.filter_nonfuzzy(&query, &config, limit);
         }
         match &self.haystacks {
-            Some(haystacks) => fuzzy_rank_haystacks(haystacks, &query, &config, limit),
+            Some(haystacks) => self.fuzzy_filter_hydrated(haystacks, &query, &config, limit),
             None => fuzzy_rank_items(&self.items, &query, &config, limit),
         }
     }
@@ -768,6 +977,67 @@ mod tests {
         let a = fuzzy_filter_async("srvc".into(), items.clone(), cfg(), None);
         let b = fuzzy_filter("srvc".into(), items, cfg(), None);
         assert_eq!(a.len(), b.len());
+    }
+
+    #[test]
+    fn parallel_matches_serial_large() {
+        // 构造 > PARALLEL_THRESHOLD 条触发多核,比对 parallel/serial 结果完全一致(确定性)。
+        let items: Vec<String> =
+            (0..25_000).map(|i| format!("item gem {i} dragon")).collect();
+        let corpus = FuzzyCorpus::new(items, false);
+        let par = FuzzyConfig {
+            parallel: true,
+            ..FuzzyConfig::default()
+        };
+        let ser = FuzzyConfig {
+            parallel: false,
+            ..FuzzyConfig::default()
+        };
+        let a = corpus.filter("gem".into(), par, Some(50));
+        let b = corpus.filter("gem".into(), ser, Some(50));
+        assert_eq!(a.len(), 50);
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(x.index, y.index);
+            assert_eq!(x.score, y.score);
+            assert_eq!(x.indices, y.indices);
+        }
+    }
+
+    #[test]
+    fn incremental_matches_nonincremental() {
+        let items: Vec<String> = (0..3000).map(|i| format!("dragon gem {i}")).collect();
+        let corpus = FuzzyCorpus::new(items, false);
+        let incr = || FuzzyConfig {
+            incremental: true,
+            ..FuzzyConfig::default()
+        };
+        // 逐字输入,走增量缓存(每次都是上次的追加扩展)。
+        corpus.filter("dg".into(), incr(), Some(20));
+        corpus.filter("dge".into(), incr(), Some(20));
+        let inc = corpus.filter("dgem".into(), incr(), Some(20));
+        // 与非增量(冷查)对比应完全一致。
+        let cold = corpus.filter("dgem".into(), FuzzyConfig::default(), Some(20));
+        assert_eq!(inc.len(), cold.len());
+        for (a, b) in inc.iter().zip(cold.iter()) {
+            assert_eq!(a.index, b.index);
+            assert_eq!(a.score, b.score);
+        }
+    }
+
+    #[test]
+    fn incremental_invalidated_on_mutation() {
+        let mut corpus =
+            FuzzyCorpus::new(vec!["dragon".to_string(), "drag".to_string()], false);
+        let incr = || FuzzyConfig {
+            incremental: true,
+            ..FuzzyConfig::default()
+        };
+        corpus.filter("dr".into(), incr(), None); // 填充缓存
+        corpus.add(vec!["draco".to_string()]); // 应清缓存
+        // 若缓存未清,"dra"(starts_with "dr")会只在旧命中集 {0,1} 里扫,漏掉新加的 draco(下标2)。
+        let r = corpus.filter("dra".into(), incr(), None);
+        assert!(r.iter().any(|h| h.index == 2), "mutation 后增量缓存应失效,能搜到新加项");
     }
 
     #[test]

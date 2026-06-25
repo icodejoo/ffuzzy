@@ -994,11 +994,15 @@ impl SseDecode for crate::api::fuzzy::FuzzyConfig {
         let mut var_normalize = <bool>::sse_decode(deserializer);
         let mut var_preferPrefix = <bool>::sse_decode(deserializer);
         let mut var_mode = <crate::api::fuzzy::MatchMode>::sse_decode(deserializer);
+        let mut var_parallel = <bool>::sse_decode(deserializer);
+        let mut var_incremental = <bool>::sse_decode(deserializer);
         return crate::api::fuzzy::FuzzyConfig {
             ignore_case: var_ignoreCase,
             normalize: var_normalize,
             prefer_prefix: var_preferPrefix,
             mode: var_mode,
+            parallel: var_parallel,
+            incremental: var_incremental,
         };
     }
 }
@@ -1224,6 +1228,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::fuzzy::FuzzyConfig {
             self.normalize.into_into_dart().into_dart(),
             self.prefer_prefix.into_into_dart().into_dart(),
             self.mode.into_into_dart().into_dart(),
+            self.parallel.into_into_dart().into_dart(),
+            self.incremental.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1336,6 +1342,8 @@ impl SseEncode for crate::api::fuzzy::FuzzyConfig {
         <bool>::sse_encode(self.normalize, serializer);
         <bool>::sse_encode(self.prefer_prefix, serializer);
         <crate::api::fuzzy::MatchMode>::sse_encode(self.mode, serializer);
+        <bool>::sse_encode(self.parallel, serializer);
+        <bool>::sse_encode(self.incremental, serializer);
     }
 }
 

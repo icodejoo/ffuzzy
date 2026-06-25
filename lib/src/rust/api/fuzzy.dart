@@ -6,8 +6,8 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `build_folded`, `build_haystacks`, `build`, `case_matching`, `filter_nonfuzzy`, `fold_pair`, `fuzzy_rank_haystacks`, `fuzzy_rank_items`, `indices_one`, `make_matcher`, `make_pattern`, `nonfuzzy_filter`, `nonfuzzy_match_indices`, `normalization`, `rank_scored`, `scan_one`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `Scored`
+// These functions are ignored because they are not marked as `pub`: `build_folded`, `build_haystacks`, `build`, `case_matching`, `clear_incr`, `filter_nonfuzzy`, `finish_fuzzy`, `fold_pair`, `fuzzy_filter_hydrated`, `fuzzy_rank_items`, `indices_one`, `make_matcher`, `make_pattern`, `nonfuzzy_filter`, `nonfuzzy_match_indices`, `normalization`, `num_threads`, `rank_scored`, `scan_haystacks_parallel`, `scan_haystacks_serial`, `scan_haystacks`, `scan_one`, `scan_subset`, `should_parallel`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `IncrCache`, `Scored`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `eq`, `fmt`
 
 /// 便捷构造默认配置，供 Dart 侧直接调用。
@@ -111,11 +111,22 @@ class FuzzyConfig {
   /// 匹配模式。
   final MatchMode mode;
 
+  /// 是否允许多核并行（仅 `Fuzzy` 搜索；按候选数阈值自动决定，小数据/简单模式/web 仍单线程）。
+  /// 建索引的 Utf32 转换始终按数据量自动并行（一次性、纯提速，不受此开关影响）。
+  final bool parallel;
+
+  /// 是否启用增量搜索缓存（仅 `FuzzyCorpus` + `Fuzzy` 模式生效）：当本次查询是上次查询的
+  /// **追加扩展**（前缀，同 ignore_case/normalize）时，只在上次命中集内重扫（命中单调收缩）。
+  /// 任何增删改/free 都会清缓存。默认 false。
+  final bool incremental;
+
   const FuzzyConfig({
     required this.ignoreCase,
     required this.normalize,
     required this.preferPrefix,
     required this.mode,
+    required this.parallel,
+    required this.incremental,
   });
 
   static Future<FuzzyConfig> default_() =>
@@ -126,7 +137,9 @@ class FuzzyConfig {
       ignoreCase.hashCode ^
       normalize.hashCode ^
       preferPrefix.hashCode ^
-      mode.hashCode;
+      mode.hashCode ^
+      parallel.hashCode ^
+      incremental.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -136,7 +149,9 @@ class FuzzyConfig {
           ignoreCase == other.ignoreCase &&
           normalize == other.normalize &&
           preferPrefix == other.preferPrefix &&
-          mode == other.mode;
+          mode == other.mode &&
+          parallel == other.parallel &&
+          incremental == other.incremental;
 }
 
 /// 列表筛选命中项：`index` 指回原列表，`score` 为匹配分，`indices` 为命中字符下标。

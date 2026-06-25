@@ -807,13 +807,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   FuzzyConfig dco_decode_fuzzy_config(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return FuzzyConfig(
       ignoreCase: dco_decode_bool(arr[0]),
       normalize: dco_decode_bool(arr[1]),
       preferPrefix: dco_decode_bool(arr[2]),
       mode: dco_decode_match_mode(arr[3]),
+      parallel: dco_decode_bool(arr[4]),
+      incremental: dco_decode_bool(arr[5]),
     );
   }
 
@@ -995,11 +997,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_normalize = sse_decode_bool(deserializer);
     var var_preferPrefix = sse_decode_bool(deserializer);
     var var_mode = sse_decode_match_mode(deserializer);
+    var var_parallel = sse_decode_bool(deserializer);
+    var var_incremental = sse_decode_bool(deserializer);
     return FuzzyConfig(
         ignoreCase: var_ignoreCase,
         normalize: var_normalize,
         preferPrefix: var_preferPrefix,
-        mode: var_mode);
+        mode: var_mode,
+        parallel: var_parallel,
+        incremental: var_incremental);
   }
 
   @protected
@@ -1200,6 +1206,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self.normalize, serializer);
     sse_encode_bool(self.preferPrefix, serializer);
     sse_encode_match_mode(self.mode, serializer);
+    sse_encode_bool(self.parallel, serializer);
+    sse_encode_bool(self.incremental, serializer);
   }
 
   @protected

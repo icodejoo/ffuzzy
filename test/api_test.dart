@@ -54,6 +54,17 @@ void main() {
       s.dispose();
     });
 
+    test('C: 建索引后释放投影缓存,add/freeIndices 退化扫描仍正确', () {
+      final s = FuzzyMatcher<_Game>(games, (g) => g.name)..buildIndices();
+      // 建索引后追加(投影缓存已释放,直接走 Rust 索引 add)
+      s.add(const _Game(5, 'Mega Dragon'));
+      expect(s.match('dragon').length, 3); // Dragon Treasure / Lucky Dragon / Mega Dragon
+      // freeIndices 后退化为整表扫描:从对象重投影,仍能搜到新加项
+      s.freeIndices();
+      expect(s.match('mega', limit: 5).any((h) => h.obj.name == 'Mega Dragon'), isTrue);
+      s.dispose();
+    });
+
     test('字段名 key（Map 数据）', () {
       final maps = [
         {'id': 1, 'name': 'Dragon Treasure'},
@@ -241,7 +252,12 @@ void main() {
 
     test('FuzzyConfig.ignoreCase 生效', () {
       const respect = FuzzyConfig(
-          ignoreCase: false, normalize: true, preferPrefix: false, mode: MatchMode.fuzzy);
+          ignoreCase: false,
+          normalize: true,
+          preferPrefix: false,
+          mode: MatchMode.fuzzy,
+          parallel: true,
+          incremental: false);
       expect(fuzzyMatch(query: 'rust', haystack: 'RUST', config: respect), isNull);
       expect(fuzzyMatch(query: 'rust', haystack: 'RUST', config: kDefaultFuzzyConfig), isNotNull);
     });
