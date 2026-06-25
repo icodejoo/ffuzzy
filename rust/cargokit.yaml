@@ -25,9 +25,9 @@ precompiled_binaries:
 # 下面整段是「极致压缩档」。切到「稳妥 600KB 档」用:bash scripts/size-profile.sh safe
 # (脚本会把本段逐行注释、并注释掉 Cargo.toml 的 panic 行;workflow 会自动不加 RUSTFLAGS)
 # size-profile:buildstd:begin
-# cargo:
-#   release:
-#     toolchain: nightly
-#     extra_flags:
-#       - "-Zbuild-std=std,panic_abort"
+cargo:
+  release:
+    toolchain: nightly
+    extra_flags:
+      - "-Zbuild-std=std,panic_abort"
 # size-profile:buildstd:end
