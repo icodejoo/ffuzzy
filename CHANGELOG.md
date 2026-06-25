@@ -1,3 +1,9 @@
+## 0.1.2
+
+- 修复 Android release 构建失败:插件 `android/build.gradle` 的 `compileSdkVersion` 从 33 提升到 35
+  （新版 Flutter 的 androidx 传递依赖要求 ≥34，否则 `checkReleaseAarMetadata` 报错）。已在 arm64 真机验证。
+- 不影响原生库的 crate-hash，沿用 0.1.1 的预编译二进制。
+
 ## 0.1.1
 
 - 原生库切换到「extreme」体积档(`panic=abort` + nightly build-std + immediate-abort),原生库体积约 265–320KB。

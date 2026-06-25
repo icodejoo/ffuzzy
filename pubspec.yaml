@@ -1,6 +1,6 @@
 name: ffuzzy
 description: "高性能模糊搜索:基于 nucleo (Rust) + flutter_rust_bridge,支持对象/字符串搜索、命中高亮、同步/异步,十万级数据比常见纯 Dart 库快 45–300 倍。"
-version: 0.1.1
+version: 0.1.2
 homepage: https://github.com/icodejoo/ffuzzy
 repository: https://github.com/icodejoo/ffuzzy
 
