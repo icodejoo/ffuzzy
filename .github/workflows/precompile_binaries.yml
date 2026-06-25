@@ -53,6 +53,8 @@ jobs:
         env:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # immediate-abort 进一步压体积;只作用于带 --target 的产物,不污染 host proc-macro。
+          RUSTFLAGS: "-Zunstable-options -Cpanic=immediate-abort"
         run: >
           dart run build_tool precompile-binaries -v
           --manifest-dir=../../rust
@@ -64,6 +66,8 @@ jobs:
         env:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # immediate-abort 进一步压体积;android 不走 zigbuild,无 host cargo install 被污染之虞。
+          RUSTFLAGS: "-Zunstable-options -Cpanic=immediate-abort"
         run: >
           dart run build_tool precompile-binaries -v
           --manifest-dir=../../rust
@@ -74,6 +78,8 @@ jobs:
 
       # 用 cargo-zigbuild 在 x86_64 上交叉编译 ARM64 Linux,
       # --glibc-version=2.17 钉死 glibc 下限(manylinux2014 基线),最大化可移植性。
+      # 此 job 不设 RUSTFLAGS immediate-abort:cargokit 会 `cargo install cargo-zigbuild`(host 编译),
+      # immediate-abort 无 build-std 会让该 install 编不过。故 arm64 仅用 build-std(体积略大于其他平台,可接受)。
       - name: Precompile (linux arm64, cross)
         if: ${{ matrix.kind == 'cross-linux' }}
         working-directory: cargokit/build_tool

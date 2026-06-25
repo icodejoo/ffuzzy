@@ -147,15 +147,23 @@ cargokit 按 `<url_prefix><crate-hash>/<target>_<lib>` 从 GitHub Release 下载
 
 发布前建议先在 Android 真机/各桌面平台跑通 `example` 构建(首次经 cargokit 交叉编译 Rust)。
 
-## 体积(打进 App 的原生库,release + size profile)
+## 体积(打进 App 的原生库)
 
-| 架构 | 大小 |
-|---|---:|
-| arm64-v8a | ~618 KB |
-| armeabi-v7a | ~448 KB |
-| x86_64 | ~666 KB |
-| windows-x64 | ~514 KB |
+三档实测(host dll,x86_64-pc-windows-msvc):基线 514KB →(+panic=abort)373KB →
+(+nightly build-std)329KB →(+RUSTFLAGS immediate-abort)**264KB**(−49%)。关 nucleo Unicode
+feature 这条路走不通(0.3.1 在 `default-features=false` 下编不过)。
 
-体积只取决于 `rust/Cargo.toml` 的 `[profile.release]`(opt-level="z" + lto + codegen-units=1 + strip)。
-要再压可加 `panic = "abort"`(但会破坏 frb 的 panic→异常桥接)。Android 发布建议 `--split-per-abi`,
-每个 APK 只带一个架构的 .so。
+发布产物(CI:build-std + immediate-abort;arm64-linux 仅 build-std)预计:
+
+| 架构 | 优化前 | 预计(待 CI 实测) |
+|---|---:|---:|
+| android arm64-v8a | ~618 KB | ~320 KB |
+| android armeabi-v7a | ~448 KB | ~230 KB |
+| android x86_64 | ~666 KB | ~345 KB |
+| windows-x64 | ~514 KB | ~265 KB |
+
+体积取决于三层叠加:① `rust/Cargo.toml [profile.release]`(opt-level="z"+lto+codegen-units=1+strip+
+**panic="abort"**);② `rust/cargokit.yaml` 的 `cargo.release`(nightly + `-Zbuild-std=std,panic_abort`);
+③ workflow 里 desktop/android job 的 `RUSTFLAGS=-Zunstable-options -Cpanic=immediate-abort`(cross-linux 不设,
+见上文 zigbuild 说明)。本机 `flutter test` 走 stable 直编,只吃到 ①(~373KB),不影响发布产物。
+Android 发布建议 `--split-per-abi`,每个 APK 只带一个架构的 .so。

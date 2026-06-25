@@ -15,3 +15,14 @@
 precompiled_binaries:
   url_prefix: "https://github.com/icodejoo/ffuzzy/releases/download/precompiled_"
   public_key: "96cfa1f593d459d7e61e3e53cc5eb2fb03e6eb8ce8469de7e978265925edfa38"
+
+# 体积优化:release 构建用 nightly + build-std,把 std/core 也按 opt-level=z + panic=abort
+# 重新编译并裁剪,显著减小原生库(实测 host 514KB → 329KB)。CI 里再叠加 RUSTFLAGS
+# `-Cpanic=immediate-abort` 可进一步到 ~264KB(见 .github/workflows/precompile_binaries.yml)。
+# cargokit 会自动安装 nightly 工具链与 rust-src。
+# 注:本机 `flutter test` 直接走 `cargo build`(stable)不读此配置,只有 cargokit 构建(CI/example)生效。
+cargo:
+  release:
+    toolchain: nightly
+    extra_flags:
+      - "-Zbuild-std=std,panic_abort"
