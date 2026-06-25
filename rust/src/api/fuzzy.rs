@@ -152,6 +152,9 @@ fn nonfuzzy_match_indices(mode: MatchMode, q: &str, hay: &str) -> Option<Vec<u32
 /// 非 Fuzzy 列表过滤：在 `source`（已折好大小写）上按**原序**匹配，命中满 `limit` 即停。
 fn nonfuzzy_filter(source: &[String], q: &str, mode: MatchMode, limit: Option<u32>) -> Vec<FuzzyHit> {
     let lim = limit.map(|l| l as usize);
+    if lim == Some(0) {
+        return Vec::new(); // limit=0 应返回空(否则下面"先 push 再判 >="会多返回 1 条)
+    }
     let mut hits = Vec::new();
     for (i, hay) in source.iter().enumerate() {
         if let Some(indices) = nonfuzzy_match_indices(mode, q, hay) {
@@ -250,7 +253,7 @@ fn scan_haystacks_parallel(
     cfg: &FuzzyConfig,
 ) -> Vec<Scored> {
     let nthreads = num_threads(haystacks.len());
-    let chunk = (haystacks.len() + nthreads - 1) / nthreads;
+    let chunk = ((haystacks.len() + nthreads - 1) / nthreads).max(1); // .max(1): 防 chunks(0) panic
     std::thread::scope(|s| {
         let handles: Vec<_> = haystacks
             .chunks(chunk)
@@ -484,6 +487,10 @@ pub fn fuzzy_filter_async(
 /// 缓存语料的模糊匹配器：候选常驻 Rust 侧，调用只跨 FFI 传查询串。
 /// `Fuzzy` 用预转换的 Utf32 索引；简单/子序列模式用源字符串（可选常驻折叠副本加速 ignore_case）。
 /// 增量搜索缓存：上次 Fuzzy 查询及其**全部命中下标**（非 top-N）。
+///
+/// 复用键 = `query` + `ignore_case` + `normalize`：因为 Fuzzy 的**命中集**只取决于这三者
+/// （`prefer_prefix`/`mode` 只影响排序或根本不进此路径，不影响是否命中）。若将来引入影响
+/// "是否命中"（而非排序）的配置，**必须**把它加进复用键，否则会静默复用错误的命中集。
 struct IncrCache {
     query: String,
     ignore_case: bool,
@@ -512,7 +519,7 @@ fn build_haystacks(items: &[String]) -> Vec<Utf32String> {
     #[cfg(not(target_arch = "wasm32"))]
     if items.len() >= PARALLEL_THRESHOLD && num_threads(items.len()) > 1 {
         let nthreads = num_threads(items.len());
-        let chunk = (items.len() + nthreads - 1) / nthreads;
+        let chunk = ((items.len() + nthreads - 1) / nthreads).max(1); // .max(1): 防 chunks(0) panic
         return std::thread::scope(|s| {
             let handles: Vec<_> = items
                 .chunks(chunk)
@@ -710,7 +717,7 @@ impl FuzzyCorpus {
         }
         // 读缓存：能复用则取上次命中集（短暂持锁、克隆后即释放，避免阻塞并发 filterAsync）。
         let subset: Option<Vec<u32>> = {
-            let g = self.incr.lock().unwrap();
+            let g = self.incr.lock().unwrap_or_else(|e| e.into_inner());
             g.as_ref().and_then(|c| {
                 let reusable = c.ignore_case == cfg.ignore_case
                     && c.normalize == cfg.normalize
@@ -725,7 +732,7 @@ impl FuzzyCorpus {
         };
         // 写缓存：记录本次**全部命中**下标（非 top-N），供下次追加扩展复用。
         {
-            let mut g = self.incr.lock().unwrap();
+            let mut g = self.incr.lock().unwrap_or_else(|e| e.into_inner());
             *g = Some(IncrCache {
                 query: query.to_string(),
                 ignore_case: cfg.ignore_case,
@@ -1038,6 +1045,94 @@ mod tests {
         // 若缓存未清,"dra"(starts_with "dr")会只在旧命中集 {0,1} 里扫,漏掉新加的 draco(下标2)。
         let r = corpus.filter("dra".into(), incr(), None);
         assert!(r.iter().any(|h| h.index == 2), "mutation 后增量缓存应失效,能搜到新加项");
+    }
+
+    #[test]
+    fn limit_zero_returns_empty_all_modes() {
+        let items = vec!["alpha".to_string(), "alto".to_string(), "beta".to_string()];
+        for mode in [
+            MatchMode::Fuzzy,
+            MatchMode::Substring,
+            MatchMode::Prefix,
+            MatchMode::Word,
+        ] {
+            let r = fuzzy_filter("al".into(), items.clone(), cfg_mode(mode), Some(0));
+            assert!(r.is_empty(), "limit=0 应返回空, mode={mode:?}");
+        }
+    }
+
+    #[test]
+    fn nonfuzzy_empty_query() {
+        let items = vec!["a".to_string(), "".to_string(), "bc".to_string()];
+        // Substring/Prefix 空查询恒真 -> 全中。
+        assert_eq!(
+            fuzzy_filter("".into(), items.clone(), cfg_mode(MatchMode::Substring), None).len(),
+            3
+        );
+        assert_eq!(
+            fuzzy_filter("".into(), items.clone(), cfg_mode(MatchMode::Prefix), None).len(),
+            3
+        );
+        // Word 空查询只命中空串。
+        let w = fuzzy_filter("".into(), items, cfg_mode(MatchMode::Word), None);
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].index, 1);
+    }
+
+    #[test]
+    fn incremental_backspace_and_rewrite() {
+        let items: Vec<String> = (0..500).map(|i| format!("dragon gem {i}")).collect();
+        let corpus = FuzzyCorpus::new(items, false);
+        let incr = || FuzzyConfig {
+            incremental: true,
+            ..FuzzyConfig::default()
+        };
+        corpus.filter("dg".into(), incr(), Some(20)); // 填缓存
+        corpus.filter("dgem".into(), incr(), Some(20)); // 扩展
+        // 退格(新查询是旧查询前缀,非扩展)-> 应回退全扫。
+        let back = corpus.filter("dg".into(), incr(), Some(20));
+        let cold = corpus.filter("dg".into(), FuzzyConfig::default(), Some(20));
+        assert_eq!(back.len(), cold.len());
+        for (a, b) in back.iter().zip(cold.iter()) {
+            assert_eq!(a.index, b.index);
+        }
+        // 完全改写。
+        let rw = corpus.filter("xyz".into(), incr(), Some(20));
+        let cold_rw = corpus.filter("xyz".into(), FuzzyConfig::default(), Some(20));
+        assert_eq!(rw.len(), cold_rw.len());
+    }
+
+    #[test]
+    fn incremental_invalidated_on_ignore_case_change() {
+        // ci=false "a" 只命中小写 'a'(idx 1,2);切到 ci=true "ab" 应能命中 "AB"(idx0)。
+        // 若缺 ignore_case 守卫而复用旧命中集 {1,2},会漏掉 idx0。
+        let items = vec!["AB".to_string(), "ab".to_string(), "Zab".to_string()];
+        let corpus = FuzzyCorpus::new(items, false);
+        let ci_off = FuzzyConfig {
+            incremental: true,
+            ignore_case: false,
+            ..FuzzyConfig::default()
+        };
+        let ci_on = FuzzyConfig {
+            incremental: true,
+            ignore_case: true,
+            ..FuzzyConfig::default()
+        };
+        corpus.filter("a".into(), ci_off, None); // 填缓存(区分大小写)
+        let r = corpus.filter("ab".into(), ci_on, None); // 忽略大小写,缓存应失效
+        assert!(
+            r.iter().any(|h| h.index == 0),
+            "ignore_case 变化必须使增量缓存失效,否则漏掉 AB"
+        );
+    }
+
+    #[test]
+    fn unicode_folding_substring_no_panic() {
+        // İ(U+0130)折叠成两个 char,折叠改变字符数。验证 substring 不 panic、下标可用。
+        // (已知限制:此类字符折叠路径下高亮下标可能与原串轻微错位,见模块头注释。)
+        let items = vec!["İstanbul".to_string(), "info".to_string()];
+        let hits = fuzzy_filter("i".into(), items, cfg_mode(MatchMode::Substring), None);
+        assert!(!hits.is_empty()); // 至少 "info" 命中;不 panic 即达标
     }
 
     #[test]

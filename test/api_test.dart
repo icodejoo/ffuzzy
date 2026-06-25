@@ -65,6 +65,29 @@ void main() {
       s.dispose();
     });
 
+    test('回归: limit=0 返回空(各模式)', () {
+      final s = FuzzyStringMatcher(['alpha', 'alto', 'beta'])..buildIndices();
+      for (final m in [
+        MatchMode.fuzzy,
+        MatchMode.substring,
+        MatchMode.prefix,
+        MatchMode.word,
+      ]) {
+        expect(s.match('al', limit: 0, mode: m), isEmpty, reason: 'mode=$m');
+      }
+      s.dispose();
+    });
+
+    test('回归: buildIndicesAsync 期间 dispose 不留索引、不抛', () async {
+      final big = List.generate(25000, (i) => 'dragon gem $i');
+      final s = FuzzyStringMatcher(big);
+      final f = s.buildIndicesAsync(); // 不 await
+      s.dispose(); // 立即 dispose
+      await f; // 不应抛
+      expect(s.isDisposed, isTrue);
+      expect(s.hasIndices, isFalse); // 刚建的索引应被弃用
+    });
+
     test('字段名 key（Map 数据）', () {
       final maps = [
         {'id': 1, 'name': 'Dragon Treasure'},

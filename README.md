@@ -171,9 +171,9 @@ final m3 = FuzzyMatcher<Game>(games, (g) => '${g.name} ${g.id}');
 // 省内存模式:不建常驻索引,每次临时处理
 final m4 = FuzzyMatcher<Game>(games, (g) => g.name, indexed: false);
 
-// 自定义配置
+// 自定义配置(推荐在默认配置上 copyWith 只改要改的字段)
 final m5 = FuzzyMatcher<Game>(games, (g) => g.name,
-    config: const FuzzyConfig(ignoreCase: false, normalize: true, preferPrefix: true));
+    config: kDefaultFuzzyConfig.copyWith(ignoreCase: false));
 ```
 
 ### 搜索
@@ -226,18 +226,19 @@ m.isDisposed;             // true
 
 | 成员 | 签名 | 说明 |
 |---|---|---|
-| 构造 | `FuzzyMatcher<T>(List<T> items, String Function(T) stringOf, {bool indexed = true, FuzzyConfig config = kDefaultFuzzyConfig})` | `stringOf` 投影出可搜索串 |
-| 构造 | `static FuzzyMatcher<Map<String,dynamic>> FuzzyMatcher.key(List<Map<String,dynamic>> items, String key, {bool indexed = true, FuzzyConfig config = kDefaultFuzzyConfig})` | 按字段名搜索 |
+| 构造 | `FuzzyMatcher<T>(List<T> items, String Function(T) stringOf, {bool indexed = true, FuzzyConfig config = kDefaultFuzzyConfig, bool ignoreCaseIndices = false})` | `stringOf` 投影出可搜索串;`ignoreCaseIndices` 见下文 |
+| 构造 | `static FuzzyMatcher<Map<String,dynamic>> FuzzyMatcher.key(List<Map<String,dynamic>> items, String key, {bool indexed = true, FuzzyConfig config = kDefaultFuzzyConfig, bool ignoreCaseIndices = false})` | 按字段名搜索 |
 | `buildIndices` | `void buildIndices()` | 建立索引(已存在则跳过) |
+| `buildIndicesAsync` | `Future<void> buildIndicesAsync()` | 建索引异步版:Utf32 转换在后台线程,**不阻塞 UI**,适合大数据集(注:`stringOf` 投影仍在调用线程) |
 | `add` / `addAll` | `void add(T item)` / `void addAll(Iterable<T> items)` | 增:追加;已建索引则直接追加(不重建,O(追加量)) |
 | `update` | `void update(int index, T item)` | 改:替换下标处对象(重投影该条) |
 | `removeAt` / `removeWhere` | `void removeAt(int index)` / `int removeWhere(bool Function(T) test)` | 删:按下标 / 按条件;`removeWhere` 返回删除数 |
 | `clear` | `void clear()` | 清空全部(实例保留,可继续 add/refresh) |
 | `refresh` | `void refresh(List<T> source)` | 整体换源并自动重建 |
-| `match` | `List<FuzzyOutput<T>> match(String query, {int? limit})` | 同步搜索;需先建索引 |
-| `matchAsync` | `Future<List<FuzzyOutput<T>>> matchAsync(String query, {int? limit})` | 异步搜索,不阻塞 UI;搜索期间若 `refresh`/`dispose`,本次结果丢弃返回空,由调用方按新状态重查 |
-| `single` | `FuzzyOutput<T>? single(String query)` | 最佳一条(同 `match` 元素类型),无命中返回 null;对象用 `?.obj` |
-| `singleAsync` | `Future<FuzzyOutput<T>?> singleAsync(String query)` | `single` 异步版 |
+| `match` | `List<FuzzyOutput<T>> match(String query, {int? limit, bool? ignoreCase, MatchMode? mode})` | 同步搜索;需先建索引。`ignoreCase`/`mode` 可按本次查询覆盖配置 |
+| `matchAsync` | `Future<List<FuzzyOutput<T>>> matchAsync(String query, {int? limit, bool? ignoreCase, MatchMode? mode})` | 异步搜索,不阻塞 UI;搜索期间若 `refresh`/`dispose`,本次结果丢弃返回空 |
+| `single` | `FuzzyOutput<T>? single(String query, {bool? ignoreCase, MatchMode? mode})` | 最佳一条(同 `match` 元素类型),无命中返回 null;对象用 `?.obj` |
+| `singleAsync` | `Future<FuzzyOutput<T>?> singleAsync(String query, {bool? ignoreCase, MatchMode? mode})` | `single` 异步版 |
 | `freeIndices` | `void freeIndices()` | 只释放 Rust 索引(Dart 侧源/投影保留,可秒级重建) |
 | `dispose` | `void dispose()` | 两侧全释放并销毁 |
 | `disposeAndWait` | `Future<void> disposeAndWait()` | 同 `dispose`,等在飞搜索排空后完成 |
@@ -331,19 +332,35 @@ class FuzzyMatch {
   final Uint32List indices;
 }
 
-// 匹配配置
-const cfg = FuzzyConfig(
-  ignoreCase: true,   // 忽略大小写
-  normalize: true,    // Unicode 归一化(影响带音标字符)
-  preferPrefix: true, // 前缀优先(真正以查询开头的项排更前)
+// 匹配配置(6 个字段;通常不直接写全,用 kDefaultFuzzyConfig.copyWith 只改要改的)
+const kDefaultFuzzyConfig = FuzzyConfig(
+  ignoreCase: true,      // 忽略大小写(也可 match(q, ignoreCase: ...) 按查询覆盖)
+  normalize: true,       // Unicode 归一化(仅 Fuzzy 生效)
+  preferPrefix: true,    // 前缀优先(仅 Fuzzy 排序)
+  mode: MatchMode.fuzzy, // 匹配模式(也可 match(q, mode: ...) 按查询覆盖)
+  parallel: true,        // 大数据 Fuzzy 搜索自动多核(候选 > 2 万触发;简单模式/小数据/web 单线程)
+  incremental: false,    // 增量缓存(仅 Fuzzy + FuzzyCorpus;逐字输入可开)
 );
 
-// 默认配置常量(Rust 侧 FuzzyConfig::default 已与此对齐)
-const kDefaultFuzzyConfig = FuzzyConfig(ignoreCase: true, normalize: true, preferPrefix: true);
-
-// 在现有配置上只改个别字段(扩展方法)
-final c = kDefaultFuzzyConfig.copyWith(ignoreCase: false);
+// 推荐:在默认配置上只改个别字段(扩展方法 copyWith)
+final c = kDefaultFuzzyConfig.copyWith(mode: MatchMode.substring);
 ```
+
+### 匹配模式 MatchMode
+
+| 模式 | 含义 | 速度(相对 fuzzy,实测大数据) |
+|---|---|---|
+| `fuzzy`(默认) | 子序列模糊 + 打分排序(容错、空格分词可乱序) | 1× |
+| `substring` | 子串包含(`contains`) | ~5× |
+| `prefix` | 前缀(`startsWith`) | ~20× |
+| `word` | **整串完全相等**(equals,**不是**词边界匹配) | ~40× |
+
+- **`mode` / `ignoreCase` 可按查询覆盖**:`m.match(q, mode: MatchMode.prefix, ignoreCase: false)`。同一个 matcher 不同查询切模式无需重建。
+- 简单模式(substring/prefix/word)按**原序**返回、不排序、命中满 `limit` 即停。
+- `parallel` / `incremental` 是 matcher 级策略(构造时经 `config` 定),不在 `match` 参数里:`incremental` 依赖"连续查询是上次前缀扩展"的状态,逐字输入搜索框时开启可加速(仅 `fuzzy` + `FuzzyCorpus` 生效)。
+- **大数据集首次建索引用 `await m.buildIndicesAsync()`** 避免卡 UI。
+- 大小写不敏感(`ignoreCase: true`)的**简单模式**想走快路径,构造传 `ignoreCaseIndices: true`(额外常驻一份小写索引,约 2× 简单索引内存);否则该路径会临时折叠、较慢。
+- `ignoreCase`(匹不匹得上)与 `ignoreCaseIndices`(大小写不敏感时快不快)是两回事,别混淆。
 
 ---
 
