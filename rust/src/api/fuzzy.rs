@@ -66,21 +66,32 @@ impl Default for FuzzyConfig {
 /// 并行阈值：候选数 >= 此值才考虑多核（小数据并行开销不划算）。
 const PARALLEL_THRESHOLD: usize = 20_000;
 
-/// 增量复用上限：上次命中集超过此值就不复用（串行子集扫会比并行全扫还慢），改走并行全扫且不缓存。
-/// 只有当查询收窄到命中 <= 此值时增量才介入，从而**绝不**比并行全扫更慢。
-const INCR_CAP: usize = 20_000;
-
 #[cfg(not(target_arch = "wasm32"))]
 fn num_threads(len: usize) -> usize {
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    cores.min(8).max(1).min(len.max(1))
+    // 留 2 个核给 UI/raster/系统;cores<=3 时结果<=1 → should_parallel/build 据此退化为串行。
+    cores.saturating_sub(2).min(8).min(len.max(1))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn should_parallel(cfg: &FuzzyConfig, len: usize) -> bool {
     cfg.parallel && len >= PARALLEL_THRESHOLD && num_threads(len) > 1
+}
+
+/// 增量复用上限：**感知是否并行**。
+/// - 并行时：全扫成本 ~ len/线程数,复用子集须小于它才划算 → 取 `len/线程数`(下限 `PARALLEL_THRESHOLD`)。
+/// - 串行(含 wasm / parallel 关 / 低核):全扫成本 ~ len,任何更小子集都值得复用 → 无上限。
+fn incr_cap(cfg: &FuzzyConfig, len: usize) -> usize {
+    let _ = (cfg, len);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if should_parallel(cfg, len) {
+            return (len / num_threads(len).max(1)).max(PARALLEL_THRESHOLD);
+        }
+    }
+    usize::MAX
 }
 
 /// 便捷构造默认配置，供 Dart 侧直接调用。
@@ -738,6 +749,8 @@ impl FuzzyCorpus {
             let scored = scan_haystacks(haystacks, query, cfg);
             return finish_fuzzy(haystacks, scored, query, cfg, limit);
         }
+        // 复用上限:并行时为 len/线程数,串行时无上限(见 incr_cap)。
+        let cap = incr_cap(cfg, haystacks.len());
         // 读缓存：能复用则取上次命中集（短暂持锁、克隆后即释放，避免阻塞并发 filterAsync）。
         let subset: Option<Vec<u32>> = {
             let g = self.incr.lock().unwrap_or_else(|e| e.into_inner());
@@ -745,7 +758,7 @@ impl FuzzyCorpus {
                 let reusable = c.ignore_case == cfg.ignore_case
                     && c.normalize == cfg.normalize
                     && !c.query.is_empty()
-                    && c.hits.len() <= INCR_CAP // 命中集过大不复用(串行子集扫 < 并行全扫)
+                    && c.hits.len() <= cap // 命中集过大不复用(并行下串行子集扫 < 并行全扫)
                     && query.starts_with(&c.query);
                 reusable.then(|| c.hits.clone())
             })
@@ -754,10 +767,10 @@ impl FuzzyCorpus {
             Some(hits) => scan_subset(haystacks, &hits, query, cfg),
             None => scan_haystacks(haystacks, query, cfg), // 可并行
         };
-        // 写缓存：只缓存"足够小"的命中集（大集留着也只会触发慢的串行扫，不如下次并行全扫）。
+        // 写缓存：只缓存"足够小"的命中集。
         {
             let mut g = self.incr.lock().unwrap_or_else(|e| e.into_inner());
-            *g = if scored.len() <= INCR_CAP {
+            *g = if scored.len() <= cap {
                 Some(IncrCache {
                     query: query.to_string(),
                     ignore_case: cfg.ignore_case,
