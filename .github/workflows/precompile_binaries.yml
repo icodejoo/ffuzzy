@@ -18,7 +18,7 @@ jobs:
         include:
           - os: ubuntu-latest    # linux-x64(原生)+ Android 四架构(NDK 交叉)
             kind: android
-          - os: ubuntu-latest    # linux arm64 + riscv64(zig 交叉,钉死低 glibc)
+          - os: ubuntu-latest    # linux arm64(zig 交叉,钉死低 glibc)
             kind: cross-linux
           - os: macos-latest     # macOS(x64/arm64) + iOS(真机/模拟器)
             kind: desktop
@@ -72,9 +72,9 @@ jobs:
           --android-ndk-version=28.2.13676358
           --android-min-sdk-version=21
 
-      # 用 cargo-zigbuild 在 x86_64 上交叉编译 ARM64 / RISC-V Linux,
-      # --glibc-version=2.28 钉死 glibc 下限(riscv64 需 >=2.27),提升可移植性。
-      - name: Precompile (linux arm64 + riscv64, cross)
+      # 用 cargo-zigbuild 在 x86_64 上交叉编译 ARM64 Linux,
+      # --glibc-version=2.17 钉死 glibc 下限(manylinux2014 基线),最大化可移植性。
+      - name: Precompile (linux arm64, cross)
         if: ${{ matrix.kind == 'cross-linux' }}
         working-directory: cargokit/build_tool
         env:
@@ -85,5 +85,4 @@ jobs:
           --manifest-dir=../../rust
           --repository=icodejoo/ffuzzy
           --target=aarch64-unknown-linux-gnu
-          --target=riscv64gc-unknown-linux-gnu
-          --glibc-version=2.28
+          --glibc-version=2.17
