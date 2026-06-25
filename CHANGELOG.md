@@ -1,3 +1,9 @@
+## 0.1.1
+
+- 原生库切换到「extreme」体积档(`panic=abort` + nightly build-std + immediate-abort),原生库体积约 265–320KB。
+- 该版本对应的预编译二进制(crate-hash `86d0ef06`)已签名上传到 GitHub Release,使用者构建时直接下载,**无需安装 Rust 工具链**。
+- 公开 API 无变化。
+
 ## 0.1.0
 
 首个版本。
