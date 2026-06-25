@@ -35,6 +35,25 @@ void main() {
       s.dispose();
     });
 
+    test('buildIndicesAsync 异步建索引后 match 可用', () async {
+      final s = FuzzyMatcher<_Game>(games, (g) => g.name);
+      await s.buildIndicesAsync();
+      expect(s.hasIndices, isTrue);
+      expect(s.match('dragon', limit: 10), isNotEmpty);
+      s.dispose();
+    });
+
+    test('per-query mode / ignoreCase 覆盖', () {
+      final s = FuzzyStringMatcher(['Dragon', 'dragonfly', 'A Dragon'])..buildIndices();
+      expect(s.match('dragon', mode: MatchMode.substring).length, 3);
+      expect(s.match('dragon', mode: MatchMode.prefix).length, 2);
+      expect(s.match('dragon', mode: MatchMode.word).length, 1);
+      // case-sensitive(per-query 覆盖默认的 ignoreCase=true)
+      expect(s.match('Dragon', mode: MatchMode.word, ignoreCase: false).length, 1);
+      expect(s.match('dragon', mode: MatchMode.word, ignoreCase: false).length, 0);
+      s.dispose();
+    });
+
     test('字段名 key（Map 数据）', () {
       final maps = [
         {'id': 1, 'name': 'Dragon Treasure'},

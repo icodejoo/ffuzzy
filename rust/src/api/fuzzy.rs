@@ -383,10 +383,16 @@ fn build_folded(items: &[String]) -> Vec<String> {
     items.iter().map(|s| s.to_lowercase()).collect()
 }
 
+/// 异步构建语料：在 frb worker 线程执行 Utf32 转换/折叠（大数据时较重），**不阻塞 Dart UI 线程**。
+/// 与 [FuzzyCorpus::new] 等价，只是不标 `#[frb(sync)]`（Dart 侧返回 `Future<FuzzyCorpus>`）。
+/// 注：候选列表的跨 FFI 编组同样在 worker 线程；但 Dart 侧的投影（stringOf）仍在调用线程算。
+pub fn fuzzy_corpus_new_async(items: Vec<String>, ignore_case_indices: bool) -> FuzzyCorpus {
+    FuzzyCorpus::build(items, ignore_case_indices)
+}
+
 impl FuzzyCorpus {
-    /// 用一组候选项构建语料。`ignore_case_indices=true` 时额外常驻一份折叠副本。
-    #[frb(sync)]
-    pub fn new(items: Vec<String>, ignore_case_indices: bool) -> FuzzyCorpus {
+    /// 实际构建逻辑（sync `new` 与 async `fuzzy_corpus_new_async` 共用）。
+    fn build(items: Vec<String>, ignore_case_indices: bool) -> FuzzyCorpus {
         let haystacks = Some(build_haystacks(&items));
         let folded = if ignore_case_indices {
             Some(build_folded(&items))
@@ -399,6 +405,12 @@ impl FuzzyCorpus {
             folded,
             keep_folded: ignore_case_indices,
         }
+    }
+
+    /// 用一组候选项构建语料。`ignore_case_indices=true` 时额外常驻一份折叠副本。
+    #[frb(sync)]
+    pub fn new(items: Vec<String>, ignore_case_indices: bool) -> FuzzyCorpus {
+        Self::build(items, ignore_case_indices)
     }
 
     /// 末尾追加（不重建）。同步维护 Utf32 索引与折叠副本。

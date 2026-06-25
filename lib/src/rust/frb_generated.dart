@@ -71,7 +71,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 1910568722;
+  int get rustContentHash => -1193813323;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -122,6 +122,9 @@ abstract class RustLibApi extends BaseApi {
   FuzzyConfig crateApiFuzzyDefaultFuzzyConfig();
 
   Future<FuzzyConfig> crateApiFuzzyFuzzyConfigDefault();
+
+  Future<FuzzyCorpus> crateApiFuzzyFuzzyCorpusNewAsync(
+      {required List<String> items, required bool ignoreCaseIndices});
 
   List<FuzzyHit> crateApiFuzzyFuzzyFilter(
       {required String query,
@@ -538,6 +541,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<FuzzyCorpus> crateApiFuzzyFuzzyCorpusNewAsync(
+      {required List<String> items, required bool ignoreCaseIndices}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_String(items, serializer);
+        sse_encode_bool(ignoreCaseIndices, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 15, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData:
+            sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFuzzyCorpus,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiFuzzyFuzzyCorpusNewAsyncConstMeta,
+      argValues: [items, ignoreCaseIndices],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiFuzzyFuzzyCorpusNewAsyncConstMeta =>
+      const TaskConstMeta(
+        debugName: "fuzzy_corpus_new_async",
+        argNames: ["items", "ignoreCaseIndices"],
+      );
+
+  @override
   List<FuzzyHit> crateApiFuzzyFuzzyFilter(
       {required String query,
       required List<String> items,
@@ -550,7 +581,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_String(items, serializer);
         sse_encode_box_autoadd_fuzzy_config(config, serializer);
         sse_encode_opt_box_autoadd_u_32(limit, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 15)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_fuzzy_hit,
@@ -581,7 +612,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_box_autoadd_fuzzy_config(config, serializer);
         sse_encode_opt_box_autoadd_u_32(limit, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 16, port: port_);
+            funcId: 17, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_fuzzy_hit,
@@ -610,7 +641,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(query, serializer);
         sse_encode_String(haystack, serializer);
         sse_encode_box_autoadd_fuzzy_config(config, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_opt_box_autoadd_u_32,
@@ -638,7 +669,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(query, serializer);
         sse_encode_String(haystack, serializer);
         sse_encode_box_autoadd_fuzzy_config(config, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_opt_box_autoadd_fuzzy_match,
@@ -662,7 +693,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(name, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -685,7 +716,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 20, port: port_);
+            funcId: 21, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,

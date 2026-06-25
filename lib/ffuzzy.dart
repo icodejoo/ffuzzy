@@ -132,6 +132,30 @@ abstract class _IndexedMatcher {
     _corpus = FuzzyCorpus(items: hs, ignoreCaseIndices: ignoreCaseIndices);
   }
 
+  /// [buildIndices] 的异步版本:Utf32 转换在 frb worker 线程执行,**不阻塞 UI**,适合大数据集。
+  /// 已存在索引则跳过(幂等)。构建期间发生 [refresh]/[dispose] 会丢弃本次结果。
+  /// 注:`FuzzyMatcher<T>` 的投影(stringOf)仍在调用线程算;此方法异步的是 Rust 侧的索引构建。
+  Future<void> buildIndicesAsync() async {
+    _ensureAlive();
+    if (!indexed) return;
+    if (_corpus != null && !_freeWhenIdle) return; // 已存在 -> 跳过
+    final hs = _haystacks;
+    if (hs == null) {
+      throw StateError('无数据源,请先 refresh(source) 再 buildIndicesAsync()');
+    }
+    final gen = _generation; // 发起时的版本
+    await ffuzzy.ensureInitialized();
+    if (_disposed || gen != _generation) return; // 期间被 dispose/refresh -> 放弃
+    final corpus =
+        await fuzzyCorpusNewAsync(items: hs, ignoreCaseIndices: ignoreCaseIndices);
+    if (_disposed || gen != _generation) {
+      corpus.dispose(); // 已过期,弃用刚建好的索引
+      return;
+    }
+    _freeWhenIdle = false;
+    _corpus = corpus;
+  }
+
   /// 只释放 Rust 侧索引(Dart 侧源/投影保留,`buildIndices` 可秒级重建)。
   /// 释放后 `match` 退化为整表扫描。有在飞异步搜索时,推迟到其排空后再释放。
   /// 幂等。仅 `indexed=true` 生效。要连 Dart 侧数据一起释放请用 [dispose]。
