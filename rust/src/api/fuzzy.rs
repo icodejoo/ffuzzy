@@ -63,7 +63,8 @@ impl Default for FuzzyConfig {
     }
 }
 
-/// 并行阈值：候选数 >= 此值才考虑多核（小数据并行开销不划算）。
+/// 并行阈值：候选数 >= 此值才考虑多核（小数据并行开销不划算）。仅原生用(wasm 无多核)。
+#[cfg(not(target_arch = "wasm32"))]
 const PARALLEL_THRESHOLD: usize = 20_000;
 
 #[cfg(not(target_arch = "wasm32"))]
