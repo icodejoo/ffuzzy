@@ -53,23 +53,45 @@ cargokit 钩子在自己的平台目录里直接编译 `../rust`。**无 rust_bu
 - **高亮按 rune**:`indices` 是字符(Unicode 标量)下标,Dart 高亮必须用 `text.runes`,不能用 `text[i]`(emoji 会错位)。
 - **prefer_prefix 修复**:不用 nucleo 的内部 `prefer_prefix`(见 nucleo issue #92),改在排序层用"命中下标是否从 0 开始"判断。Rust `FuzzyConfig::default()` 与 Dart `kDefaultFuzzyConfig` 都为 `preferPrefix=true`。
 
-## 开发工作流
+## 改代码后怎么重新编译(速查)
 
-改了 `rust/src/api/*.rs` 后:
+先按"改了什么"分流——大多数情况**不需要**全量重编:
+
+**A. 只改了 Dart(`lib/ffuzzy.dart` 或测试)** —— 不碰 FFI 边界,直接:
+```bash
+flutter analyze && flutter test          # 复用现有 rust/target/release/rust_lib_ffuzzy.dll
+```
+
+**B. 改了 `rust/src/api/*.rs` 的函数签名/新增导出**(FFI 边界变了)——必须先 codegen 再编译:
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
-flutter_rust_bridge_codegen generate          # 重生成 lib/src/rust + rust/src/frb_generated.rs
-(cd rust && cargo build --release)            # 宿主 dll,供 flutter test 加载(rust/target/release/rust_lib_ffuzzy.dll)
-flutter test                                  # 单元/竞态/CRUD/内存测试
-(cd rust && cargo test)                       # Rust 单测
-cd example && flutter run -d <device>         # 跑演示 App
+flutter_rust_bridge_codegen generate     # 重生成 lib/src/rust/* + rust/src/frb_generated.rs(勿手改)
+(cd rust && cargo build --release)        # 重新编宿主 dll(flutter test 靠它)
+flutter test && (cd rust && cargo test)   # Dart 测试 + Rust 单测
 ```
+
+**C. 只改了 `rust/` 的函数体(签名没变)** —— 跳过 codegen,只重编:
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+(cd rust && cargo build --release) && flutter test
+```
+
+**判断要不要 codegen**:动了 `#[frb]` 暴露的函数签名、参数/返回类型、新增/删除导出 → 要 B;否则 C。
+codegen 后务必 `git diff lib/src/rust rust/src/frb_generated.rs` 确认生成物变化合理。
+
+**真机/桌面端验证**(走 cargokit 完整交叉编译):
+```bash
+cd example && flutter run -d <device>            # 或 flutter build windows --release
+```
+
+> ⚠️ **改了 `rust/`(含 `Cargo.lock`)= crate-hash 变**:发布前**必须重跑 precompile CI**(见下文),
+> 否则使用者算出的哈希在 Release 里找不到二进制,会退回源码编译(又要 Rust)。纯 Dart 改动不影响哈希。
 
 ## 本机环境踩坑点(zh-CN 网络 + Windows)
 
 - **Rust**:rustup(msvc host),已装 Android target(aarch64/armv7/x86_64/i686-linux-android)。
 - **crate 镜像**:`~/.cargo/config.toml` 用 rsproxy.cn 源(官方源 TLS 被干扰)。
-- **cargokit + Gradle 9**:`rust_builder/cargokit/gradle/plugin.gradle` 已把 `Project.exec()` 改成注入式
+- **cargokit + Gradle 9**:`cargokit/gradle/plugin.gradle` 已把 `Project.exec()` 改成注入式
   `ExecOperations`(Gradle 9 移除了 `exec()`)。重新 integrate/升级 frb 后这个补丁会被覆盖,需重打。
 - **NDK**:example 钉 `ndkVersion = "28.2.13676358"`(插件要求该版本)。
 - **Android 构建(仅本机网络需要,勿提交进发布包)**:JDK 信任库不认网络 TLS 拦截代理 → 需
@@ -77,6 +99,22 @@ cd example && flutter run -d <device>         # 跑演示 App
   Gradle 发行版用本地 `file://`(官方源大文件被 RST);Maven 仓库加阿里云镜像。这些是**本机环境配置**,
   不应写进要发布的插件,验证时临时加。
 - **JDK**:`flutter config --jdk-dir "C:\sdk\jdk\openjdk-21.0.5+11"`(曾指向不存在的旧路径)。
+
+## CI / 推送踩坑(已踩过,务必记住)
+
+- **shell 脚本的可执行位(高频坑)**:在 Windows 上 git 默认不带执行位,提交后 `cargokit/run_build_tool.sh`
+  和 `cargokit/build_pod.sh` 会变成 `100644`。Linux/macOS runner checkout 后**不可执行**,Android/iOS
+  交叉编译时 Rust 拿 `run_build_tool.sh` 当 linker 包装器去 exec → `could not exec the linker ...
+  Permission denied (os error 13)`。**修法**:`git update-index --chmod=+x cargokit/run_build_tool.sh
+  cargokit/build_pod.sh`。**自检**:`git ls-files -s '*.sh'` 必须是 `100755`。新加任何 `.sh` 都要打执行位。
+- **预编译 CI**:`.github/workflows/precompile_binaries.yml` 手动触发(workflow_dispatch),串行 matrix。
+  Android 没有独立 runner,**挂在 ubuntu 上用 NDK 交叉编译**(`--android-sdk-location=$ANDROID_SDK_ROOT
+  --android-ndk-version=...`);iOS 必须 macОС、Windows 必须 windows。需先在仓库 Settings 配好 Secret `PRIVATE_KEY`。
+- **本机网络会 RST 大块 git 上传**:`git push` 整包(几百 KB 一次)会在 `send-pack: unexpected disconnect
+  while reading sideband packet` 处断开,但**放行小推送**。解法:把改动拆成多个小提交逐个推,且**用远程 sha
+  与本地 HEAD 比对确认真·成功**(`git ls-remote origin -h refs/heads/main`),不要只看命令退出码——曾误报成功。
+- **读 CI 日志**:本机没装 `gh`,GitHub Actions 日志是 JS 渲染 + 日志 API 403,WebFetch 抓不到正文。
+  最快是让用户贴失败步骤最后 30~50 行;run 页面只能拿到 "exit code 1"。
 
 ## 发布到 pub.dev
 
