@@ -182,6 +182,13 @@ bash scripts/size-profile.sh status    # 看当前档
 脚本注释/反注释这两处即可;③ 的 workflow **自动探测** `cargokit.yaml` 是否有生效的 build-std 来决定加不加
 RUSTFLAGS(单一事实来源 = 提交里的配置,脚本与 workflow 不会失配)。
 
-⚠️ **切档 = crate-hash 变**。切完必须:提交 → 推送 → 重跑 Precompile 工作流(生成新 hash 的二进制)→
-发新版本。使用者按 hash 下载,两套配置无法对同一发布版本同时生效;若极致档发布后才发现问题,走「切 safe →
-重跑 CI → 发 0.x.+1」即可。
+**两种切法**:
+- 本地:`bash scripts/size-profile.sh safe`(改文件)→ 自己 commit/push → 重跑工作流。
+- **CI 下拉框(省事,推荐)**:Actions → Run workflow → `profile` 选 `extreme`/`safe`/`keep`。`prepare` job
+  会在 runner 上跑切换脚本、把改动**提交回仓库**(github-actions[bot]),再让编译阶段 checkout 那个 commit 来编。
+  即"选档位 + 点运行"一步到位,本地记得 `git pull`。`keep` = 用仓库当前配置不改。
+
+⚠️ **为什么不能做成两个独立 workflow 各编一套**:crate-hash 把 `Cargo.toml`+`cargokit.yaml`+`src/*.rs`+
+`Cargo.lock`+`build.rs` 全算进去(`crate_hash.dart`),使用者按 hash 下载。所以**哪套二进制能被用,取决于提交里的
+配置**——两套配置无法对同一发布版本同时生效。切档 = hash 变,切完必须重跑 CI + **发新版本号**。极致档发布后若出问题,
+走「workflow 选 safe → 跑完 → 发 0.x+1」。
