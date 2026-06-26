@@ -48,6 +48,9 @@ uint32_t utf8_next_codepoint(const char **p)
         *p += 1;
         return 0xFFFD;
     }
+    /* Reject surrogate halves (U+D800–U+DFFF) and out-of-Unicode-range values */
+    if (cp >= 0xD800 && cp <= 0xDFFF) return 0xFFFD;
+    if (cp > 0x10FFFF) return 0xFFFD;
     return cp;
 }
 
@@ -107,30 +110,34 @@ ffuzzy_corpus_t *ffuzzy_corpus_new(void)
 
 static int corpus_grow(ffuzzy_corpus_t *c)
 {
+    /* Guard against uint32_t overflow on doubling */
+    if (c->cap > UINT32_MAX / 2) return -1;
     uint32_t new_cap = c->cap * 2;
 
+    /*
+     * Realloc each array.  When realloc succeeds, the old pointer is freed
+     * internally — we MUST update the struct field immediately so that we
+     * never hold a stale (freed) pointer.  If a later realloc fails, the
+     * corpus will have some arrays at new_cap and others still at the old cap,
+     * which is consistent-enough for continued use at the OLD len (no new
+     * items are added after a grow failure).  The already-grown arrays are
+     * not rolled back (that would require a second realloc and could also
+     * fail), but they remain valid pointers at new_cap size.
+     */
     char     **ni = (char     **)realloc(c->items,    new_cap * sizeof(char *));
+    if (ni)  c->items    = ni;
     uint32_t **nu = (uint32_t **)realloc(c->u32items, new_cap * sizeof(uint32_t *));
+    if (nu)  c->u32items = nu;
     int       *nl = (int       *)realloc(c->u32lens,  new_cap * sizeof(int));
+    if (nl)  c->u32lens  = nl;
     int8_t   **nb = (int8_t   **)realloc(c->bonuses,  new_cap * sizeof(int8_t *));
+    if (nb)  c->bonuses  = nb;
     uint64_t  *nm = (uint64_t  *)realloc(c->bitmaps,  new_cap * sizeof(uint64_t));
+    if (nm)  c->bitmaps  = nm;
 
-    if (!ni || !nu || !nl || !nb || !nm) {
-        /* Restore originals (realloc returns NULL, originals still valid) */
-        if (ni) c->items    = ni;
-        if (nu) c->u32items = nu;
-        if (nl) c->u32lens  = nl;
-        if (nb) c->bonuses  = nb;
-        if (nm) c->bitmaps  = nm;
-        return -1;
-    }
+    if (!ni || !nu || !nl || !nb || !nm) return -1;
 
-    c->items    = ni;
-    c->u32items = nu;
-    c->u32lens  = nl;
-    c->bonuses  = nb;
-    c->bitmaps  = nm;
-    c->cap      = new_cap;
+    c->cap = new_cap;
     return 0;
 }
 
@@ -148,35 +155,38 @@ void ffuzzy_corpus_add(ffuzzy_corpus_t *corpus,
         const char *src = items[k] ? items[k] : "";
         uint32_t    idx = corpus->len;
 
-        /* Original UTF-8 copy */
+        /* Allocate all resources for this slot into locals first, then
+         * commit atomically so the corpus arrays are never partially written. */
         size_t slen = strlen(src);
-        corpus->items[idx] = (char *)malloc(slen + 1);
-        if (!corpus->items[idx]) return;
-        memcpy(corpus->items[idx], src, slen + 1);
+        char *item_copy = (char *)malloc(slen + 1);
+        if (!item_copy) return;
+        memcpy(item_copy, src, slen + 1);
 
         /* UTF-32 conversion */
         uint32_t *u32  = NULL;
         int       ulen = 0;
         if (utf8_to_utf32(src, &u32, &ulen) != 0) {
-            free(corpus->items[idx]);
-            corpus->items[idx] = NULL;
+            free(item_copy);
             return;
         }
-        corpus->u32items[idx] = u32;
-        corpus->u32lens[idx]  = ulen;
 
         /* Precompute bonuses */
         int8_t *bon = NULL;
         if (ulen > 0) {
             bon = (int8_t *)malloc((size_t)ulen * sizeof(int8_t));
             if (!bon) {
-                free(corpus->items[idx]);
+                free(item_copy);
                 free(u32);
                 return;
             }
             scorer_compute_bonuses(u32, ulen, bon);
         }
-        corpus->bonuses[idx] = bon;
+
+        /* All allocations succeeded — commit atomically */
+        corpus->items[idx]    = item_copy;
+        corpus->u32items[idx] = u32;
+        corpus->u32lens[idx]  = ulen;
+        corpus->bonuses[idx]  = bon;
 
         /* Bitmap prefilter */
         corpus->bitmaps[idx] = bitmap_from_utf8(src);

@@ -153,7 +153,7 @@ static int32_t sw_dp(const uint32_t *pat, int plen,
                 if (bonus[j] > c_score) c_score = bonus[j];
 
                 if (i == 0) {
-                    H_curr[j] = SCORE_MATCH + bonus[j] * BONUS_FIRST_CHAR_MULT;
+                    H_curr[j] = SCORE_MATCH + (int32_t)bonus[j] * BONUS_FIRST_CHAR_MULT;
                     C_curr[j] = bonus[j];
                 } else {
                     int32_t prev_h = (j > 0) ? H_prev[j-1] : 0;
@@ -231,9 +231,13 @@ int32_t scorer_score_positions(const uint32_t *pat, int plen,
     }
     if (pi < plen) return -1;
 
+    /* Guard against integer overflow on 32-bit platforms before the multiply */
+    if (plen > 65536 || slen > 65536) return -1;
+    size_t cells = (size_t)(unsigned)plen * (size_t)(unsigned)slen;
+
     /* Allocate full matrix H[plen][slen] and C[plen][slen] */
-    int32_t *H = (int32_t *)calloc((size_t)plen * slen, sizeof(int32_t));
-    int32_t *C = (int32_t *)calloc((size_t)plen * slen, sizeof(int32_t));
+    int32_t *H = (int32_t *)calloc(cells, sizeof(int32_t));
+    int32_t *C = (int32_t *)calloc(cells, sizeof(int32_t));
     if (!H || !C) { free(H); free(C); return -1; }
 
 #define H_AT(i,j) H[(i)*slen+(j)]
@@ -256,7 +260,7 @@ int32_t scorer_score_positions(const uint32_t *pat, int plen,
                 if (bonus[j] > c_score) c_score = bonus[j];
 
                 if (i == 0) {
-                    H_AT(i,j) = SCORE_MATCH + bonus[j] * BONUS_FIRST_CHAR_MULT;
+                    H_AT(i,j) = SCORE_MATCH + (int32_t)bonus[j] * BONUS_FIRST_CHAR_MULT;
                     C_AT(i,j) = bonus[j];
                 } else {
                     int32_t prev_h = (j > 0) ? H_AT(i-1, j-1) : 0;
@@ -274,22 +278,41 @@ int32_t scorer_score_positions(const uint32_t *pat, int plen,
 
     if (best < 0) { free(H); free(C); return -1; }
 
-    /* Backtrack: greedy walk from (plen-1, best_j) up to (0, ?) */
+    /* Backtrack: walk from (plen-1, best_j) back to row 0, ensuring each
+     * chosen position actually matched pat[i] in the scoring pass.
+     *
+     * Strategy: prefer the diagonal predecessor (i-1, j-1).  If that cell
+     * is zero or negative, scan leftward in row i-1 for the highest-scoring
+     * cell that corresponds to an actual match of pat[i-1] (H_AT(i-1,j2)>0).
+     * Fall back to scanning for the first valid match position. */
+    {
+        uint32_t pc_ignore;
+        (void)pc_ignore;
+    }
     int cur_j = best_j;
     for (int i = plen - 1; i >= 0; i--) {
         positions[i] = (uint32_t)cur_j;
-        /* Find the j in row i-1 that contributed to H_AT(i, cur_j) */
         if (i > 0) {
-            /* We want the largest-scoring predecessor at (i-1, j') where j' < cur_j */
-            int32_t best_prev = -1;
-            int     best_prev_j = 0;
-            for (int j2 = cur_j - 1; j2 >= 0; j2--) {
-                if (H_AT(i-1, j2) > best_prev) {
-                    best_prev   = H_AT(i-1, j2);
-                    best_prev_j = j2;
+            /* Preferred: exact diagonal predecessor */
+            int diag_j = cur_j - 1;
+            if (diag_j >= 0 && H_AT(i-1, diag_j) > 0) {
+                cur_j = diag_j;
+            } else {
+                /* Scan leftward for any non-zero cell in the predecessor row */
+                int found_j = -1;
+                for (int j2 = cur_j - 1; j2 >= 0; j2--) {
+                    if (H_AT(i-1, j2) > 0) {
+                        found_j = j2;
+                        break;
+                    }
+                }
+                if (found_j >= 0) {
+                    cur_j = found_j;
+                } else {
+                    /* No valid predecessor found; step back one position */
+                    cur_j = (cur_j > 0) ? cur_j - 1 : 0;
                 }
             }
-            cur_j = best_prev_j;
         }
     }
 

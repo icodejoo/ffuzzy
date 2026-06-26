@@ -10,6 +10,22 @@ extern "C" {
 
 /* ---- result types ---- */
 
+/*
+ * ffuzzy_hit_t – one fuzzy-match result.
+ *
+ * indices / indices_len contract:
+ *   indices != NULL && indices_len == pat_len  : positions were computed normally.
+ *   indices == NULL && indices_len == 0        : position tracking failed (OOM).
+ *
+ * score range: depends on string lengths and scoring constants; higher is
+ * better.  A score >= 0 indicates a match; -1 is never stored in a hit.
+ *
+ * The caller must free the result via ffuzzy_results_free() — do NOT free
+ * individual hits or the indices pointer directly.
+ *
+ * Layout note: int32_t score ensures consistent struct layout across Win32
+ * and POSIX (avoids 'int' size ambiguity for FFI consumers such as ffigen).
+ */
 typedef struct {
     uint32_t  index;        /* index into the corpus */
     int32_t   score;        /* Smith-Waterman score  */
@@ -29,6 +45,17 @@ typedef struct ffuzzy_corpus ffuzzy_corpus_t;
 /* ---- corpus API ---- */
 
 ffuzzy_corpus_t *ffuzzy_corpus_new(void);
+
+/*
+ * ffuzzy_corpus_add – add 'count' UTF-8 strings to the corpus.
+ *
+ * The library makes a private copy of each string.  The caller retains full
+ * ownership of the items array and each items[i] pointer and may free them
+ * immediately after this call returns.
+ *
+ * Items can only be appended; there is no remove or update operation.
+ * Indices returned by ffuzzy_filter() are stable insertion-order positions.
+ */
 void             ffuzzy_corpus_add(ffuzzy_corpus_t *corpus,
                                    const char     **items,
                                    uint32_t         count);

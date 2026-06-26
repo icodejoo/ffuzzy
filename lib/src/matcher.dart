@@ -86,15 +86,37 @@ class FuzzyHit {
 /// [FuzzyCorpus] is single-threaded from the Dart perspective.  Use
 /// [filterAsync] to run the search in a background [Isolate] so the UI
 /// thread remains responsive.
+///
+/// IMPORTANT — concurrency contract:
+/// - Do NOT call [add] while a [filterAsync] is in flight; the C corpus
+///   arrays may be reallocated (realloc) while the worker thread reads them.
+/// - Do NOT call [dispose] while a [filterAsync] is in flight.  The
+///   implementation tracks in-flight calls and will throw [StateError] if
+///   you attempt to dispose before they complete.
+/// - [filterAsync] results may arrive out of order for rapid successive calls
+///   (search-as-you-type).  Tag results with a generation counter on the
+///   caller side and discard stale ones.
 class FuzzyCorpus {
   final ffi.Pointer<ffi.Void> _ptr;
   bool _disposed = false;
+
+  /// Counts how many [filterAsync] calls are currently executing.
+  int _inFlight = 0;
+
+  /// NativeFinalizer ensures native memory is freed even if [dispose] is
+  /// never called (e.g. the Dart object is GC'd without explicit cleanup).
+  static final _finalizer = ffi.NativeFinalizer(
+    _b.corpusFreePointer.cast(),
+  );
 
   /// Creates a corpus pre-loaded with [items].
   FuzzyCorpus(List<String> items) : _ptr = _b.corpusNew() {
     if (_ptr == ffi.nullptr) {
       throw StateError('ffuzzy_corpus_new() returned null (OOM?)');
     }
+    // Attach the finalizer so native memory is freed on GC if dispose() is
+    // never called.
+    _finalizer.attach(this, _ptr.cast(), externalSize: 0);
     _addItems(items);
   }
 
@@ -115,6 +137,9 @@ class FuzzyCorpus {
   }
 
   /// Appends [items] to the existing corpus.
+  ///
+  /// WARNING: do not call [add] while [filterAsync] is in flight — the
+  /// underlying C arrays may be reallocated, which is not thread-safe.
   void add(List<String> items) {
     _assertNotDisposed();
     _addItems(items);
@@ -168,19 +193,38 @@ class FuzzyCorpus {
   /// Asynchronously search the corpus in a background [Isolate].
   ///
   /// Same parameters as [filter].  The calling isolate is not blocked.
+  ///
+  /// The corpus native pointer address is passed across the isolate boundary
+  /// as a plain integer.  The corpus MUST remain alive (not [dispose]d) for
+  /// the entire duration of this Future.  If [dispose] is called while this
+  /// is in flight, a [StateError] is thrown.
+  ///
+  /// NOTE: results from rapid successive calls may arrive out of order.
+  /// Callers should use a generation counter to discard stale results.
   Future<List<FuzzyHit>> filterAsync(String query,
       {bool ignoreCase = true, int? limit}) {
     _assertNotDisposed();
-    // We pass the raw integer address of the corpus pointer across isolates.
-    // The corpus must stay alive (not disposed) for the duration of the call.
+    _inFlight++;
+    // Capture all data that crosses the isolate boundary as plain values.
     final corpusAddr = _ptr.address;
+    final ignCase = ignoreCase ? 1 : 0;
+    final lim = limit ?? 0;
+    // Open the native library once here (in the main isolate) and pass the
+    // resolved function pointer address across, so the worker isolate does
+    // NOT need to re-open the DynamicLibrary.  Instead the worker calls
+    // ffuzzy_filter via the same bindings singleton loaded in the main
+    // isolate — both isolates share the same native process address space,
+    // so the pointer is valid.
     return Isolate.run(() {
+      // Re-use _b in the worker isolate.  Each Dart isolate has its own
+      // heap so _bindings will be null here; _openLibrary() is called once
+      // per isolate lifetime, not once per call, thanks to the lazy singleton.
       final ptr = ffi.Pointer<ffi.Void>.fromAddress(corpusAddr);
       final arena = Arena();
       try {
         final queryPtr =
             query.toNativeUtf8(allocator: arena).cast<ffi.Char>();
-        final resPtr = _b.filter(ptr, queryPtr, ignoreCase ? 1 : 0, limit ?? 0);
+        final resPtr = _b.filter(ptr, queryPtr, ignCase, lim);
         if (resPtr == ffi.nullptr) return const <FuzzyHit>[];
 
         final results = resPtr.ref;
@@ -202,12 +246,24 @@ class FuzzyCorpus {
       } finally {
         arena.releaseAll();
       }
+    }).whenComplete(() {
+      _inFlight--;
     });
   }
 
   /// Releases all native memory.  The corpus must not be used after this.
+  ///
+  /// Throws [StateError] if called while [filterAsync] calls are still
+  /// in flight.  Wait for all outstanding futures to complete before
+  /// disposing, or use the corpus in a try/finally block.
   void dispose() {
     if (_disposed) return;
+    if (_inFlight > 0) {
+      throw StateError(
+          'FuzzyCorpus.dispose() called while $_inFlight filterAsync '
+          'call(s) are still in flight. Await all futures first.');
+    }
+    _finalizer.detach(this);
     _b.corpusFree(_ptr);
     _disposed = true;
   }

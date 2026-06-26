@@ -444,6 +444,183 @@ static void test_scorer_extra(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* scorer_score_positions tests                                         */
+/* ------------------------------------------------------------------ */
+
+static void test_scorer_score_positions(void)
+{
+    BEGIN_TEST("scorer_score_positions");
+
+    /*
+     * Pattern "ac" against "abcd":
+     *   'a' matches at position 0, 'c' matches at position 2.
+     *   Positions must be [0, 2], strictly increasing, within [0, slen).
+     */
+    uint32_t pat[8], str[8];
+    int plen, slen;
+    int8_t bonus[8];
+    uint32_t positions[8];
+
+    u32_from_ascii("ac", pat, &plen);
+    u32_from_ascii("abcd", str, &slen);
+    scorer_compute_bonuses(str, slen, bonus);
+
+    int32_t score_pos = scorer_score_positions(pat, plen, str, slen, bonus, 0, positions);
+    int32_t score_ref = scorer_score(pat, plen, str, slen, bonus, 0);
+
+    printf("  score_positions(\"ac\",\"abcd\") = %d, score = %d\n", score_pos, score_ref);
+    CHECK(score_pos > 0);
+    CHECK(score_pos == score_ref);
+    CHECK(positions[0] == 0);
+    CHECK(positions[1] == 2);
+    CHECK(positions[0] < positions[1]);
+    CHECK(positions[1] < (uint32_t)slen);
+}
+
+static void test_scorer_positions_indices(void)
+{
+    BEGIN_TEST("scorer_positions_indices");
+
+    /*
+     * Verify that ffuzzy_filter() returns non-NULL indices with correct
+     * indices_len, all positions within range, and strictly increasing.
+     */
+    ffuzzy_corpus_t *c = ffuzzy_corpus_new();
+    const char *items[] = { "dragon" };
+    ffuzzy_corpus_add(c, items, 1);
+
+    ffuzzy_results_t *r = ffuzzy_filter(c, "rg", 0, 0);
+    CHECK(r != NULL);
+    if (r && r->len > 0) {
+        ffuzzy_hit_t *h = &r->hits[0];
+        printf("  indices_len = %u  (expected 2)\n", h->indices_len);
+        CHECK(h->indices_len == 2);
+        CHECK(h->indices != NULL);
+        if (h->indices) {
+            printf("  indices[0]=%u, indices[1]=%u\n",
+                   h->indices[0], h->indices[1]);
+            /* positions must be within [0, strlen("dragon")) = [0,6) */
+            CHECK(h->indices[0] < 6);
+            CHECK(h->indices[1] < 6);
+            CHECK(h->indices[0] < h->indices[1]);  /* strictly increasing */
+        }
+        ffuzzy_results_free(r);
+    }
+    ffuzzy_corpus_free(c);
+}
+
+/* ------------------------------------------------------------------ */
+/* camelCase bonus test                                                 */
+/* ------------------------------------------------------------------ */
+
+static void test_scorer_camel_bonus(void)
+{
+    BEGIN_TEST("scorer_camel_bonus");
+
+    /*
+     * Verify that BONUS_CAMEL is assigned to a CC_UPPER char following CC_LOWER.
+     * "getScore":  bonus[3] ('S' after 'et' = LOWER->UPPER) must be BONUS_CAMEL.
+     * "getsscore": bonus[3] ('s' after 'et' = LOWER->LOWER) must be 0.
+     *
+     * Also verify the bonus value: BONUS_CAMEL=7 < BONUS_BOUNDARY=8, so a
+     * camelCase hit for 'S' should score lower than a word-boundary hit.
+     * We verify the bonus table directly rather than comparing two full scores,
+     * since the full score depends on many factors.
+     */
+    uint32_t str_camel[16], str_lower[16];
+    int slen_camel, slen_lower;
+    int8_t bonus_camel[16], bonus_lower[16];
+
+    u32_from_ascii("getScore", str_camel, &slen_camel);
+    scorer_compute_bonuses(str_camel, slen_camel, bonus_camel);
+
+    u32_from_ascii("getsscore", str_lower, &slen_lower);
+    scorer_compute_bonuses(str_lower, slen_lower, bonus_lower);
+
+    /* Directly verify that bonus[3] for "getScore" is BONUS_CAMEL */
+    printf("  bonus[3](getScore) = %d  (expected BONUS_CAMEL=%d)\n",
+           (int)bonus_camel[3], (int)BONUS_CAMEL);
+    CHECK(bonus_camel[3] == BONUS_CAMEL);
+
+    /* "getsscore": 's' at pos 3 follows LOWER -> LOWER, bonus must be 0 */
+    printf("  bonus[3](getsscore) = %d  (expected 0)\n", (int)bonus_lower[3]);
+    CHECK(bonus_lower[3] == 0);
+
+    /* camelCase 'S' must score higher than the same position lowercase 's'
+     * when pattern matches at that position.  Use "S" vs "s" in pattern. */
+    uint32_t pat_upper[4], pat_lower_p[4];
+    int plen_upper, plen_lower;
+    int8_t dummy[4];  /* not used */
+
+    u32_from_ascii("gS", pat_upper, &plen_upper);
+    u32_from_ascii("gs", pat_lower_p, &plen_lower);
+
+    int32_t score_camel = scorer_score(pat_upper, plen_upper, str_camel, slen_camel, bonus_camel, 0);
+    int32_t score_nocamel = scorer_score(pat_lower_p, plen_lower, str_lower, slen_lower, bonus_lower, 0);
+
+    (void)dummy;
+    printf("  score(\"gS\",\"getScore\")  = %d\n", score_camel);
+    printf("  score(\"gs\",\"getsscore\") = %d\n", score_nocamel);
+    CHECK(score_camel > 0);
+    CHECK(score_nocamel > 0);
+    /* camelCase hit (BONUS_CAMEL=7) vs no bonus (0): camel must score higher */
+    CHECK(score_camel > score_nocamel);
+}
+
+/* ------------------------------------------------------------------ */
+/* NULL corpus / query guard tests                                      */
+/* ------------------------------------------------------------------ */
+
+static void test_filter_null_guards(void)
+{
+    BEGIN_TEST("filter_null_guards");
+
+    /* ffuzzy_filter with NULL corpus must return NULL without crashing */
+    ffuzzy_results_t *r1 = ffuzzy_filter(NULL, "query", 0, 0);
+    printf("  ffuzzy_filter(NULL, \"query\") = %p  (expected NULL)\n", (void*)r1);
+    CHECK(r1 == NULL);
+
+    /* ffuzzy_filter with NULL query must return NULL without crashing */
+    ffuzzy_corpus_t *c = ffuzzy_corpus_new();
+    const char *items[] = { "hello" };
+    ffuzzy_corpus_add(c, items, 1);
+    ffuzzy_results_t *r2 = ffuzzy_filter(c, NULL, 0, 0);
+    printf("  ffuzzy_filter(corpus, NULL) = %p  (expected NULL)\n", (void*)r2);
+    CHECK(r2 == NULL);
+    ffuzzy_corpus_free(c);
+}
+
+/* ------------------------------------------------------------------ */
+/* Empty query with limit test                                          */
+/* ------------------------------------------------------------------ */
+
+static void test_empty_query_with_limit(void)
+{
+    BEGIN_TEST("empty_query_with_limit");
+
+    /*
+     * Empty query on 6-item corpus with limit=3 must return exactly 3 items.
+     */
+    ffuzzy_corpus_t *c = ffuzzy_corpus_new();
+    const char *items[] = {
+        "Dragon Treasure", "dragonfly", "A Dragon",
+        "Golden Fortune",  "Super Gems", "Lucky Dragon"
+    };
+    ffuzzy_corpus_add(c, items, 6);
+
+    ffuzzy_results_t *r = ffuzzy_filter(c, "", 0, 3);
+    CHECK(r != NULL);
+    if (r) {
+        printf("  empty query, limit=3 -> %u  (expected 3)\n", r->len);
+        CHECK(r->len == 3);
+        for (uint32_t i = 0; i < r->len; i++)
+            CHECK(r->hits[i].score == 0);
+        ffuzzy_results_free(r);
+    }
+    ffuzzy_corpus_free(c);
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -472,6 +649,19 @@ int main(void)
 
     /* End-to-end */
     test_endtoend_dragon();
+
+    /* scorer_score_positions */
+    test_scorer_score_positions();
+    test_scorer_positions_indices();
+
+    /* camelCase bonus */
+    test_scorer_camel_bonus();
+
+    /* NULL guards */
+    test_filter_null_guards();
+
+    /* Empty query + limit */
+    test_empty_query_with_limit();
 
     printf("\n=== Results: %d passed, %d failed ===\n", g_pass, g_fail);
     return (g_fail == 0) ? 0 : 1;

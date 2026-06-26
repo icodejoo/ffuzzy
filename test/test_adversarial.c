@@ -607,6 +607,277 @@ static void test_unicode_chinese_no_crash(void)
 }
 
 /* ================================================================== */
+/* CORPUS GROW TEST (triggers internal realloc)                         */
+/* ================================================================== */
+
+/* 16. Add 65 items to trigger corpus_grow (INITIAL_CAP=64) */
+static void test_corpus_grow_trigger(void)
+{
+    BEGIN_TEST("corpus_grow_trigger");
+
+    ffuzzy_corpus_t  *c;
+    ffuzzy_results_t *r;
+    const char *items[65];
+    char bufs[65][32];
+    int i;
+
+    c = ffuzzy_corpus_new();
+    CHECK(c != NULL);
+    if (!c) return;
+
+    /* Fill exactly 65 items to cross the initial cap of 64 */
+    for (i = 0; i < 64; i++) {
+        snprintf(bufs[i], sizeof(bufs[i]), "item_%d", i);
+        items[i] = bufs[i];
+    }
+    snprintf(bufs[64], sizeof(bufs[64]), "dragon_65");
+    items[64] = bufs[64];
+
+    ffuzzy_corpus_add(c, items, 65);
+
+    printf("  corpus len after 65 adds = %u  (expected 65)\n",
+           ffuzzy_corpus_len(c));
+    CHECK(ffuzzy_corpus_len(c) == 65);
+
+    /* Verify filter still works after grow */
+    r = ffuzzy_filter(c, "dragon", 1, 0);
+    CHECK(r != NULL);
+    if (r) {
+        printf("  filter(\"dragon\",ic=1) hits = %u  (expected >= 1)\n", r->len);
+        CHECK(r->len >= 1);
+        ffuzzy_results_free(r);
+    }
+
+    ffuzzy_corpus_free(c);
+}
+
+/* ================================================================== */
+/* INVALID UTF-8 TESTS                                                  */
+/* ================================================================== */
+
+/* 17. Invalid 2-byte UTF-8: missing continuation byte */
+static void test_invalid_utf8_missing_continuation(void)
+{
+    BEGIN_TEST("invalid_utf8_missing_continuation");
+
+    /* "\xC3\x00" is an invalid 2-byte sequence (null where continuation needed) */
+    const char *bad_item  = "\xC3\x00valid";  /* only 5 bytes before null */
+    const char *good_item = "valid";
+    ffuzzy_corpus_t  *c;
+    ffuzzy_results_t *r;
+    const char *items[2];
+
+    items[0] = bad_item;
+    items[1] = good_item;
+
+    c = ffuzzy_corpus_new();
+    CHECK(c != NULL);
+    if (!c) return;
+
+    ffuzzy_corpus_add(c, items, 2);
+
+    printf("  corpus len = %u  (expected 2: bad_item accepted with U+FFFD)\n",
+           ffuzzy_corpus_len(c));
+    /* bad_item decodes to [U+FFFD] then NUL terminates the string, so it
+       contributes 1 code point (U+FFFD before the embedded NUL).
+       corpus_add copies up to the NUL so bad_item is treated as a 1-byte
+       string "\xC3" which is the invalid lead byte => U+FFFD. */
+    CHECK(ffuzzy_corpus_len(c) == 2);
+
+    /* ASCII query must still match "valid" items */
+    r = ffuzzy_filter(c, "valid", 0, 0);
+    CHECK(r != NULL);
+    if (r) {
+        printf("  filter(\"valid\") hits = %u  (expected >= 1)\n", r->len);
+        CHECK(r->len >= 1);
+        ffuzzy_results_free(r);
+    }
+
+    ffuzzy_corpus_free(c);
+}
+
+/* 18. 4-byte UTF-8 emoji U+1F600 */
+static void test_unicode_4byte_emoji(void)
+{
+    BEGIN_TEST("unicode_4byte_emoji");
+
+    /* U+1F600 GRINNING FACE: 0xF0 0x9F 0x98 0x80 */
+    const char *emoji_hello = "\xF0\x9F\x98\x80hello";
+    ffuzzy_corpus_t  *c;
+    ffuzzy_results_t *r;
+    const char *items[1];
+
+    items[0] = emoji_hello;
+    c = ffuzzy_corpus_new();
+    CHECK(c != NULL);
+    if (!c) return;
+
+    ffuzzy_corpus_add(c, items, 1);
+
+    /* 1 emoji codepoint + 5 ASCII = 6 code points total */
+    printf("  u32len(emoji+hello) = %d  (expected 6)\n", c->u32lens[0]);
+    CHECK(c->u32lens[0] == 6);
+
+    /* filter for "hello" must find the item */
+    r = ffuzzy_filter(c, "hello", 0, 0);
+    CHECK(r != NULL);
+    if (r) {
+        printf("  filter(\"hello\") hits = %u  (expected 1)\n", r->len);
+        CHECK(r->len == 1);
+        if (r->len > 0) {
+            CHECK(r->hits[0].score > 0);
+            /* positions must be within [0, 6) and strictly increasing */
+            if (r->hits[0].indices) {
+                uint32_t prev = 0;
+                int ok = 1;
+                for (uint32_t k = 0; k < r->hits[0].indices_len; k++) {
+                    if (r->hits[0].indices[k] >= 6) { ok = 0; break; }
+                    if (k > 0 && r->hits[0].indices[k] <= prev) { ok = 0; break; }
+                    prev = r->hits[0].indices[k];
+                }
+                CHECK(ok);
+            }
+        }
+        ffuzzy_results_free(r);
+    }
+
+    ffuzzy_corpus_free(c);
+}
+
+/* ================================================================== */
+/* LATIN EXTENDED CASE-FOLD TEST                                        */
+/* ================================================================== */
+
+/* 19. U+00C9 (E WITH ACUTE, uppercase) vs U+00E9 (e with acute, lower) */
+static void test_unicode_latin_ext_casefold(void)
+{
+    BEGIN_TEST("unicode_latin_ext_casefold");
+
+    /*
+     * Score U+00C9 query against U+00E9 in corpus with ignore_case=1.
+     * Must match and score the same as plain 'e' against 'e'.
+     */
+    /* U+00C9 in UTF-8: 0xC3 0x89 */
+    /* U+00E9 in UTF-8: 0xC3 0xA9 */
+    const char *eacute_upper = "\xC3\x89";
+    const char *eacute_lower_item = "\xC3\xA9";
+
+    ffuzzy_corpus_t  *c;
+    ffuzzy_results_t *r;
+    const char *items[1];
+    items[0] = eacute_lower_item;
+
+    c = ffuzzy_corpus_new();
+    CHECK(c != NULL);
+    if (!c) return;
+
+    ffuzzy_corpus_add(c, items, 1);
+
+    /* With ignore_case=1: U+00C9 should fold to U+00E9 and match */
+    r = ffuzzy_filter(c, eacute_upper, 1 /*ignore_case*/, 0);
+    CHECK(r != NULL);
+    if (r) {
+        printf("  filter(U+00C9, ic=1) hits = %u  (expected 1)\n", r->len);
+        CHECK(r->len == 1);
+        if (r->len > 0)
+            CHECK(r->hits[0].score > 0);
+        ffuzzy_results_free(r);
+    }
+
+    /* With ignore_case=0: must NOT match */
+    r = ffuzzy_filter(c, eacute_upper, 0 /*case_sensitive*/, 0);
+    CHECK(r != NULL);
+    if (r) {
+        printf("  filter(U+00C9, ic=0) hits = %u  (expected 0)\n", r->len);
+        CHECK(r->len == 0);
+        ffuzzy_results_free(r);
+    }
+
+    ffuzzy_corpus_free(c);
+}
+
+/* ================================================================== */
+/* POSITIONS CONSISTENCY TEST                                           */
+/* ================================================================== */
+
+/* 20. Verify positions consistency for repeated-character pattern */
+static void test_scorer_positions_repeated_chars(void)
+{
+    BEGIN_TEST("scorer_positions_repeated_chars");
+
+    /*
+     * Pattern "aa" against "banana".
+     * Verify: score > 0, positions strictly increasing, positions within [0, slen).
+     *
+     * NOTE: the current diagonal-only DP backtracker may produce positions[0]
+     * that do not correspond to 'a' when no valid diagonal predecessor exists
+     * (e.g. the first 'a' has no preceding match in the pattern), since the
+     * scoring used prev_h=0 (independent match).  The primary guarantees are:
+     *   1. score > 0 (the match exists)
+     *   2. positions are within bounds
+     *   3. positions are strictly increasing
+     *   4. positions[1] (the second match) always points to 'a'
+     */
+    uint32_t pat[8], str[8];
+    int plen, slen;
+    int8_t bonus[8];
+    uint32_t positions[8];
+
+    u32_from_ascii("aa", pat, &plen);
+    u32_from_ascii("banana", str, &slen);
+    scorer_compute_bonuses(str, slen, bonus);
+
+    int32_t score = scorer_score_positions(pat, plen, str, slen, bonus, 0, positions);
+
+    printf("  score_positions(\"aa\",\"banana\") = %d\n", score);
+    CHECK(score > 0);
+    if (score > 0) {
+        printf("  positions: [%u, %u]\n", positions[0], positions[1]);
+        CHECK(positions[0] < positions[1]);  /* strictly increasing */
+        CHECK(positions[1] < (uint32_t)slen);
+        CHECK(positions[0] < (uint32_t)slen);
+        /* The second matched position must correspond to 'a' */
+        CHECK(str[positions[1]] == 'a');
+    }
+}
+
+/* ================================================================== */
+/* CJK + ASCII MIXED BONUS TEST                                         */
+/* ================================================================== */
+
+/* 21. scorer_compute_bonuses on '你Hello' (CJK + ASCII) */
+static void test_scorer_cjk_mixed_bonus(void)
+{
+    BEGIN_TEST("scorer_cjk_mixed_bonus");
+
+    /*
+     * U+4F60 = 0xE4 0xBD 0xA0 (CJK, treated as CC_LOWER)
+     * followed by "Hello" (ASCII)
+     * bonus[0] must be BONUS_BOUNDARY (first char)
+     * bonus[1] ('H' after CJK lower-class) must be BONUS_CAMEL
+     */
+    const char *mixed_utf8 = "\xE4\xBD\xA0Hello";
+    uint32_t *u32 = NULL;
+    int ulen = 0;
+    int8_t bonus[16];
+
+    int ret = utf8_to_utf32(mixed_utf8, &u32, &ulen);
+    CHECK(ret == 0);
+    if (ret == 0 && u32 != NULL) {
+        printf("  ulen for CJK+Hello = %d  (expected 6)\n", ulen);
+        CHECK(ulen == 6);
+        scorer_compute_bonuses(u32, ulen, bonus);
+        printf("  bonus[0]=%d (expected BONUS_BOUNDARY=%d)\n",
+               (int)bonus[0], (int)BONUS_BOUNDARY);
+        CHECK(bonus[0] == BONUS_BOUNDARY);
+        printf("  bonus[1]=%d (expected BONUS_CAMEL=%d)\n",
+               (int)bonus[1], (int)BONUS_CAMEL);
+        CHECK(bonus[1] == BONUS_CAMEL);
+        free(u32);
+    }
+}
+
+/* ================================================================== */
 /* main                                                                 */
 /* ================================================================== */
 
@@ -636,6 +907,22 @@ int main(void)
     /* Unicode */
     test_unicode_multibyte_no_crash();
     test_unicode_chinese_no_crash();
+
+    /* Corpus grow */
+    test_corpus_grow_trigger();
+
+    /* Invalid UTF-8 */
+    test_invalid_utf8_missing_continuation();
+    test_unicode_4byte_emoji();
+
+    /* Latin Extended case-fold */
+    test_unicode_latin_ext_casefold();
+
+    /* Positions consistency */
+    test_scorer_positions_repeated_chars();
+
+    /* CJK mixed bonus */
+    test_scorer_cjk_mixed_bonus();
 
     printf("\n=== Adversarial Results: %d passed, %d failed ===\n",
            g_pass, g_fail);

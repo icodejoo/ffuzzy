@@ -98,6 +98,9 @@ static void do_work(work_t *w)
     w->hit_count = 0;
 
     for (uint32_t i = w->start; i < w->end; i++) {
+        /* Guard against partially-initialised slots */
+        if (!corpus->u32items[i] || corpus->u32lens[i] < 0) continue;
+
         /* Bitmap prefilter */
         if (!bitmap_could_match(corpus->bitmaps[i], w->query_bm))
             continue;
@@ -196,18 +199,16 @@ ffuzzy_results_t *thread_pool_filter(ffuzzy_corpus_t *corpus,
     /* Empty query: return all corpus items with score 0 */
     if (pat_len == 0) {
         free(pat_u32);
-        ffuzzy_hit_t *hits = (ffuzzy_hit_t *)calloc(total, sizeof(ffuzzy_hit_t));
+        /* Only allocate as many slots as we will actually return */
+        uint32_t result_len = (limit > 0 && limit < total) ? limit : total;
+        ffuzzy_hit_t *hits = (ffuzzy_hit_t *)calloc(result_len, sizeof(ffuzzy_hit_t));
         if (!hits) return NULL;
-        for (uint32_t i = 0; i < total; i++) {
+        for (uint32_t i = 0; i < result_len; i++) {
             hits[i].index       = i;
             hits[i].score       = 0;
             hits[i].indices     = NULL;
             hits[i].indices_len = 0;
         }
-        uint32_t result_len = total;
-        /* Apply limit */
-        /* (limit == 0 means no limit) */
-        if (limit > 0 && result_len > limit) result_len = limit;
         ffuzzy_results_t *r = (ffuzzy_results_t *)malloc(sizeof(ffuzzy_results_t));
         if (!r) { free(hits); return NULL; }
         r->hits = hits;
@@ -233,7 +234,8 @@ ffuzzy_results_t *thread_pool_filter(ffuzzy_corpus_t *corpus,
     for (int t = 0; t < nthreads; t++) {
         uint32_t s = (uint32_t)t * chunk;
         uint32_t e = s + chunk;
-        if (e > total) e = total;
+        if (s >= total) e = s;        /* this thread has no items to process */
+        else if (e > total) e = total;
 
         works[t].corpus      = corpus;
         works[t].start       = s;
@@ -244,8 +246,10 @@ ffuzzy_results_t *thread_pool_filter(ffuzzy_corpus_t *corpus,
         works[t].ignore_case = ignore_case;
         works[t].hit_count   = 0;
 
-        uint32_t sz = e - s;
-        works[t].hits = (ffuzzy_hit_t *)malloc(sz * sizeof(ffuzzy_hit_t));
+        uint32_t sz = e - s;  /* 0 when s >= total, no wraparound */
+        /* Even threads with sz==0 need a non-NULL hits pointer for consistency;
+           malloc(0) is implementation-defined so use a minimal 1-byte alloc. */
+        works[t].hits = (ffuzzy_hit_t *)malloc(sz > 0 ? sz * sizeof(ffuzzy_hit_t) : 1);
         if (!works[t].hits) { alloc_ok = 0; break; }
     }
 
@@ -266,16 +270,30 @@ ffuzzy_results_t *thread_pool_filter(ffuzzy_corpus_t *corpus,
             /* Fall back to single-threaded */
             for (int t = 0; t < nthreads; t++) do_work(&works[t]);
         } else {
-            for (int t = 0; t < nthreads; t++) {
+            /* Track which threads were successfully launched */
+            int *launched = (int *)calloc((size_t)nthreads, sizeof(int));
+            if (!launched) {
+                /* Fall back to single-threaded */
+                free(threads);
+                for (int t = 0; t < nthreads; t++) do_work(&works[t]);
+            } else {
+                for (int t = 0; t < nthreads; t++) {
 #ifdef _WIN32
-                thread_create(&threads[t], win32_worker, &works[t]);
+                    launched[t] = (thread_create(&threads[t], win32_worker, &works[t]) == 0);
 #else
-                thread_create(&threads[t], posix_worker, &works[t]);
+                    launched[t] = (thread_create(&threads[t], posix_worker, &works[t]) == 0);
 #endif
+                    if (!launched[t]) {
+                        /* Thread creation failed: run synchronously */
+                        do_work(&works[t]);
+                    }
+                }
+                for (int t = 0; t < nthreads; t++) {
+                    if (launched[t]) thread_join(threads[t]);
+                }
+                free(launched);
+                free(threads);
             }
-            for (int t = 0; t < nthreads; t++)
-                thread_join(threads[t]);
-            free(threads);
         }
     }
 
@@ -298,12 +316,22 @@ ffuzzy_results_t *thread_pool_filter(ffuzzy_corpus_t *corpus,
         }
     }
 
+    if (total_hits > 0 && !merged) {
+        /* merged allocation failed: free each hit's indices before the flat slab */
+        for (int t = 0; t < nthreads; t++) {
+            for (uint32_t j = 0; j < works[t].hit_count; j++)
+                free(works[t].hits[j].indices);
+            free(works[t].hits);
+        }
+        free(works);
+        free(pat_u32);
+        return NULL;
+    }
+
     /* Free per-thread hit arrays (merged owns the indices pointers now) */
     for (int t = 0; t < nthreads; t++) free(works[t].hits);
     free(works);
     free(pat_u32);
-
-    if (total_hits > 0 && !merged) return NULL;
 
     /* Sort descending by score */
     if (merged && total_hits > 1)
