@@ -6,7 +6,9 @@
 //! 匹配模式（[MatchMode]）：
 //! - `Fuzzy`（默认）：nucleo 子序列模糊 + 打分 + 排序。**两趟**：先 score 全扫并排序，
 //!   再只对返回的 top-N 回溯高亮下标，避免给所有命中都白算/分配下标。
-//! - `Substring`/`Prefix`/`Word`：字面（包含/前缀/整串相等），原序、不排序、命中即截断。
+//! - `Substring`/`Prefix`/`Word`（仅 full 版本，需 feature = "advanced_modes"）：
+//!   字面（包含/前缀/整串相等），原序、不排序、命中即截断。
+//!   Lite 版本（--no-default-features）忽略这三种模式，退化为 Fuzzy。
 //!
 //! 大小写：`ignore_case` 是**按查询**的参数。简单模式/子序列在「原样」或「折叠（小写）」字符串上匹配——
 //! 默认在原样上：`ignore_case=false` 直接比（快），`ignore_case=true` 则把候选临时折叠后比（慢，少数路径）；
@@ -19,19 +21,23 @@ use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str, Utf32String};
 
 /// 匹配模式。
+///
+/// Lite 版本（--no-default-features）仅有效地支持 `Fuzzy`；传入其他变体退化为 Fuzzy。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MatchMode {
-    /// nucleo 子序列模糊匹配 + 打分 + 排序（默认）。
+    /// nucleo 子序列模糊匹配 + 打分 + 排序（默认；lite/full 均支持）。
     Fuzzy,
-    /// 精确子串：`haystack` 包含 `query`。
+    /// 精确子串：`haystack` 包含 `query`（仅 full）。
     Substring,
-    /// 前缀：`haystack` 以 `query` 开头。
+    /// 前缀：`haystack` 以 `query` 开头（仅 full）。
     Prefix,
-    /// 全词：`haystack` 与 `query` 完全相等。
+    /// 全词：`haystack` 与 `query` 完全相等（仅 full）。
     Word,
 }
 
 /// 模糊匹配配置。`ignore_case` 按查询传，其余仅 `Fuzzy` 相关。
+///
+/// Lite 版本中 `mode`/`parallel`/`incremental` 字段存在但被忽略（始终用 Fuzzy 单线程非增量）。
 pub struct FuzzyConfig {
     /// 忽略大小写。
     pub ignore_case: bool,
@@ -39,14 +45,11 @@ pub struct FuzzyConfig {
     pub normalize: bool,
     /// 前缀优先（仅 `Fuzzy` 的排序生效）。
     pub prefer_prefix: bool,
-    /// 匹配模式。
+    /// 匹配模式（lite 版本中 non-Fuzzy 退化为 Fuzzy）。
     pub mode: MatchMode,
-    /// 是否允许多核并行（仅 `Fuzzy` 搜索；按候选数阈值自动决定，小数据/简单模式/web 仍单线程）。
-    /// 建索引的 Utf32 转换始终按数据量自动并行（一次性、纯提速，不受此开关影响）。
+    /// 是否允许多核并行（仅 full 版本 + `Fuzzy` 搜索；lite 中忽略）。
     pub parallel: bool,
-    /// 是否启用增量搜索缓存（仅 `FuzzyCorpus` + `Fuzzy` 模式生效）：当本次查询是上次查询的
-    /// **追加扩展**（前缀，同 ignore_case/normalize）时，只在上次命中集内重扫（命中单调收缩）。
-    /// 任何增删改/free 都会清缓存。默认 false。
+    /// 是否启用增量搜索缓存（仅 full 版本 + `FuzzyCorpus` + `Fuzzy` 模式生效；lite 中忽略）。
     pub incremental: bool,
 }
 
@@ -63,11 +66,13 @@ impl Default for FuzzyConfig {
     }
 }
 
+// ───────────────────────── parallel feature: 多核常量与辅助 ─────────────────────────
+
 /// 并行阈值：候选数 >= 此值才考虑多核（小数据并行开销不划算）。仅原生用(wasm 无多核)。
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "parallel"))]
 const PARALLEL_THRESHOLD: usize = 20_000;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "parallel"))]
 fn num_threads(len: usize) -> usize {
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -76,17 +81,20 @@ fn num_threads(len: usize) -> usize {
     cores.saturating_sub(2).min(8).min(len.max(1))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "parallel"))]
 fn should_parallel(cfg: &FuzzyConfig, len: usize) -> bool {
     cfg.parallel && len >= PARALLEL_THRESHOLD && num_threads(len) > 1
 }
 
+// ───────────────────────── advanced_modes feature: 增量复用上限 ─────────────────────────
+
 /// 增量复用上限：**感知是否并行**。
 /// - 并行时：全扫成本 ~ len/线程数,复用子集须小于它才划算 → 取 `len/线程数`(下限 `PARALLEL_THRESHOLD`)。
 /// - 串行(含 wasm / parallel 关 / 低核):全扫成本 ~ len,任何更小子集都值得复用 → 无上限。
+#[cfg(feature = "advanced_modes")]
 fn incr_cap(cfg: &FuzzyConfig, len: usize) -> usize {
     let _ = (cfg, len);
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "parallel"))]
     {
         if should_parallel(cfg, len) {
             return (len / num_threads(len).max(1)).max(PARALLEL_THRESHOLD);
@@ -140,10 +148,11 @@ fn make_pattern(query: &str, cfg: &FuzzyConfig) -> Pattern {
     Pattern::parse(query, case_matching(cfg), normalization(cfg))
 }
 
-// ───────────────────────── 非 Fuzzy（简单 + 子序列）匹配 ─────────────────────────
+// ───────────────────────── advanced_modes feature: 非 Fuzzy 匹配 ─────────────────────────
 
 /// 在「已按 ignore_case 折好大小写」的 `q`/`hay` 上做非 Fuzzy 匹配。
 /// 命中返回字符（rune）下标，不命中返回 `None`。
+#[cfg(feature = "advanced_modes")]
 fn nonfuzzy_match_indices(mode: MatchMode, q: &str, hay: &str) -> Option<Vec<u32>> {
     match mode {
         MatchMode::Word => (hay == q).then(|| (0..hay.chars().count() as u32).collect()),
@@ -166,6 +175,7 @@ fn nonfuzzy_match_indices(mode: MatchMode, q: &str, hay: &str) -> Option<Vec<u32
 }
 
 /// 非 Fuzzy 列表过滤：在 `source`（已折好大小写）上按**原序**匹配，命中满 `limit` 即停。
+#[cfg(feature = "advanced_modes")]
 fn nonfuzzy_filter(source: &[String], q: &str, mode: MatchMode, limit: Option<u32>) -> Vec<FuzzyHit> {
     let lim = limit.map(|l| l as usize);
     if lim == Some(0) {
@@ -262,7 +272,7 @@ fn scan_haystacks_serial(haystacks: &[Utf32String], query: &str, cfg: &FuzzyConf
 
 /// 第一趟扫描（多核）：分块、每线程独立 `Matcher`/`Pattern`，结果按全局下标合并。
 /// 归并后由 `rank_scored` 用同一比较器排序，结果与串行**完全一致**（确定性）。
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "parallel"))]
 fn scan_haystacks_parallel(
     haystacks: &[Utf32String],
     query: &str,
@@ -310,7 +320,7 @@ fn scan_haystacks_parallel(
 
 /// 第一趟扫描分流：大数据 + 开启并行 → 多核；否则串行。wasm 恒走串行。
 fn scan_haystacks(haystacks: &[Utf32String], query: &str, cfg: &FuzzyConfig) -> Vec<Scored> {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "parallel"))]
     if should_parallel(cfg, haystacks.len()) {
         return scan_haystacks_parallel(haystacks, query, cfg);
     }
@@ -318,6 +328,7 @@ fn scan_haystacks(haystacks: &[Utf32String], query: &str, cfg: &FuzzyConfig) -> 
 }
 
 /// 增量复用：只扫上次命中集 `subset` 中的候选（串行；子集通常已较小）。
+#[cfg(feature = "advanced_modes")]
 fn scan_subset(
     haystacks: &[Utf32String],
     subset: &[u32],
@@ -413,9 +424,11 @@ fn fuzzy_rank_items(
 
 // ───────────────────────── 单条匹配（保持原 API） ─────────────────────────
 
-/// 对单个字符串打分；不匹配返回 `None`。简单/子序列模式命中返回 `Some(0)`。
+/// 对单个字符串打分；不匹配返回 `None`。
+/// Lite 版本中 `config.mode` 非 Fuzzy 时退化为 Fuzzy（返回 Fuzzy 分数而非 `Some(0)`）。
 #[frb(sync)]
 pub fn fuzzy_match(query: String, haystack: String, config: FuzzyConfig) -> Option<u32> {
+    #[cfg(feature = "advanced_modes")]
     if config.mode != MatchMode::Fuzzy {
         let (q, hay) = fold_pair(&query, &haystack, config.ignore_case);
         return nonfuzzy_match_indices(config.mode, &q, &hay).map(|_| 0);
@@ -433,6 +446,7 @@ pub fn fuzzy_match_indices(
     haystack: String,
     config: FuzzyConfig,
 ) -> Option<FuzzyMatch> {
+    #[cfg(feature = "advanced_modes")]
     if config.mode != MatchMode::Fuzzy {
         let (q, hay) = fold_pair(&query, &haystack, config.ignore_case);
         return nonfuzzy_match_indices(config.mode, &q, &hay)
@@ -451,7 +465,8 @@ pub fn fuzzy_match_indices(
         })
 }
 
-/// 折叠一对字符串（用于单条匹配的 ignore_case）。
+/// 折叠一对字符串（用于单条匹配的 ignore_case；仅 advanced_modes 使用）。
+#[cfg(feature = "advanced_modes")]
 fn fold_pair(q: &str, hay: &str, ignore_case: bool) -> (String, String) {
     if ignore_case {
         (q.to_lowercase(), hay.to_lowercase())
@@ -463,6 +478,7 @@ fn fold_pair(q: &str, hay: &str, ignore_case: bool) -> (String, String) {
 // ───────────────────────── 无状态列表过滤 ─────────────────────────
 
 /// 对列表做筛选。`Fuzzy` 按分数降序，其余按原序（命中满 `limit` 即停）。
+/// Lite 版本中非 Fuzzy 的 `config.mode` 退化为 Fuzzy。
 #[frb(sync)]
 pub fn fuzzy_filter(
     query: String,
@@ -470,6 +486,7 @@ pub fn fuzzy_filter(
     config: FuzzyConfig,
     limit: Option<u32>,
 ) -> Vec<FuzzyHit> {
+    #[cfg(feature = "advanced_modes")]
     if config.mode != MatchMode::Fuzzy {
         let q = if config.ignore_case {
             query.to_lowercase()
@@ -502,11 +519,12 @@ pub fn fuzzy_filter_async(
 
 /// 缓存语料的模糊匹配器：候选常驻 Rust 侧，调用只跨 FFI 传查询串。
 /// `Fuzzy` 用预转换的 Utf32 索引；简单/子序列模式用源字符串（可选常驻折叠副本加速 ignore_case）。
-/// 增量搜索缓存：上次 Fuzzy 查询及其**全部命中下标**（非 top-N）。
+/// 增量搜索缓存（仅 advanced_modes）：上次 Fuzzy 查询及其**全部命中下标**（非 top-N）。
 ///
 /// 复用键 = `query` + `ignore_case` + `normalize`：因为 Fuzzy 的**命中集**只取决于这三者
 /// （`prefer_prefix`/`mode` 只影响排序或根本不进此路径，不影响是否命中）。若将来引入影响
 /// "是否命中"（而非排序）的配置，**必须**把它加进复用键，否则会静默复用错误的命中集。
+#[cfg(feature = "advanced_modes")]
 struct IncrCache {
     query: String,
     ignore_case: bool,
@@ -520,17 +538,19 @@ pub struct FuzzyCorpus {
     items: Vec<String>,
     /// 预转换的 Utf32 索引（`Fuzzy` 用）；`free` 后为 `None`。
     haystacks: Option<Vec<Utf32String>>,
-    /// 增量搜索缓存（`Mutex` 因 `filter` 是 `&self` 且异步在 worker 线程跑）。
+    /// 增量搜索缓存（仅 advanced_modes；`Mutex` 因 `filter` 是 `&self` 且异步在 worker 线程跑）。
     /// 任何增删改/free 都会清空。
+    #[cfg(feature = "advanced_modes")]
     incr: std::sync::Mutex<Option<IncrCache>>,
-    /// 惰性折叠（小写）副本缓存：用 `ignore_case=true` 的简单模式时**首次查询构建一次**并缓存
+    /// 惰性折叠（小写）副本缓存（仅 advanced_modes）：用 `ignore_case=true` 的简单模式时首次构建并缓存
     /// （`Arc` 便于短持锁克隆），之后复用，避免每查都全量降小写。任何增删改/free 失效。
+    #[cfg(feature = "advanced_modes")]
     folded_cache: std::sync::Mutex<Option<std::sync::Arc<Vec<String>>>>,
 }
 
 fn build_haystacks(items: &[String]) -> Vec<Utf32String> {
     // 大数据自动多核转换（一次性、纯提速、保序）。
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "parallel"))]
     if items.len() >= PARALLEL_THRESHOLD && num_threads(items.len()) > 1 {
         let nthreads = num_threads(items.len());
         let chunk = items.len().div_ceil(nthreads).max(1); // .max(1): 防 chunks(0) panic
@@ -556,6 +576,7 @@ fn build_haystacks(items: &[String]) -> Vec<Utf32String> {
     items.iter().map(|s| Utf32String::from(s.as_str())).collect()
 }
 
+#[cfg(feature = "advanced_modes")]
 fn build_folded(items: &[String]) -> Vec<String> {
     items.iter().map(|s| s.to_lowercase()).collect()
 }
@@ -574,22 +595,29 @@ impl FuzzyCorpus {
         FuzzyCorpus {
             items,
             haystacks,
+            #[cfg(feature = "advanced_modes")]
             incr: std::sync::Mutex::new(None),
+            #[cfg(feature = "advanced_modes")]
             folded_cache: std::sync::Mutex::new(None),
         }
     }
 
-    /// 清空易失缓存（增量 + 惰性折叠;任何结构性变更/free 后调用）。
+    /// 清空易失缓存（增量 + 惰性折叠；任何结构性变更/free 后调用）。
+    /// Lite 版本中为空操作（无缓存字段）。
     fn clear_caches(&self) {
-        if let Ok(mut g) = self.incr.lock() {
-            *g = None;
-        }
-        if let Ok(mut g) = self.folded_cache.lock() {
-            *g = None;
+        #[cfg(feature = "advanced_modes")]
+        {
+            if let Ok(mut g) = self.incr.lock() {
+                *g = None;
+            }
+            if let Ok(mut g) = self.folded_cache.lock() {
+                *g = None;
+            }
         }
     }
 
     /// 取惰性折叠副本（无则构建并缓存）。短持锁:命中直接 clone `Arc`,未命中构建后存。
+    #[cfg(feature = "advanced_modes")]
     fn lazy_folded(&self) -> std::sync::Arc<Vec<String>> {
         let mut g = self.folded_cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(a) = g.as_ref() {
@@ -688,6 +716,7 @@ impl FuzzyCorpus {
     }
 
     /// 非 Fuzzy 过滤：`ignore_case` 时用惰性折叠副本，否则用原样源；做字面/子序列匹配。
+    #[cfg(feature = "advanced_modes")]
     fn filter_nonfuzzy(&self, query: &str, cfg: &FuzzyConfig, limit: Option<u32>) -> Vec<FuzzyHit> {
         let q = if cfg.ignore_case {
             query.to_lowercase()
@@ -705,19 +734,15 @@ impl FuzzyCorpus {
         nonfuzzy_filter(source, &q, cfg.mode, limit)
     }
 
-    /// Fuzzy 过滤（已驻留 Utf32）：支持增量复用（仅 `incremental=true` 且本次是上次的追加扩展）。
-    fn fuzzy_filter_hydrated(
+    /// 增量缓存路径（仅 advanced_modes；从 `fuzzy_filter_hydrated` 分离出来保持干净）。
+    #[cfg(feature = "advanced_modes")]
+    fn fuzzy_filter_incremental(
         &self,
         haystacks: &[Utf32String],
         query: &str,
         cfg: &FuzzyConfig,
         limit: Option<u32>,
     ) -> Vec<FuzzyHit> {
-        if !cfg.incremental {
-            let scored = scan_haystacks(haystacks, query, cfg);
-            return finish_fuzzy(haystacks, scored, query, cfg, limit);
-        }
-        // 复用上限:并行时为 len/线程数,串行时无上限(见 incr_cap)。
         let cap = incr_cap(cfg, haystacks.len());
         // 读缓存：能复用则取上次命中集（短暂持锁、克隆后即释放，避免阻塞并发 filterAsync）。
         let subset: Option<Vec<u32>> = {
@@ -752,9 +777,27 @@ impl FuzzyCorpus {
         finish_fuzzy(haystacks, scored, query, cfg, limit)
     }
 
-    /// 过滤已缓存的语料。`Fuzzy` 按分数降序；其余按原序。
+    /// Fuzzy 过滤（已驻留 Utf32）。
+    /// advanced_modes：支持增量复用（仅 `incremental=true` 且本次是上次的追加扩展）。
+    fn fuzzy_filter_hydrated(
+        &self,
+        haystacks: &[Utf32String],
+        query: &str,
+        cfg: &FuzzyConfig,
+        limit: Option<u32>,
+    ) -> Vec<FuzzyHit> {
+        #[cfg(feature = "advanced_modes")]
+        if cfg.incremental {
+            return self.fuzzy_filter_incremental(haystacks, query, cfg, limit);
+        }
+        let scored = scan_haystacks(haystacks, query, cfg);
+        finish_fuzzy(haystacks, scored, query, cfg, limit)
+    }
+
+    /// 过滤已缓存的语料。`Fuzzy` 按分数降序；其余按原序（仅 advanced_modes）。
     #[frb(sync)]
     pub fn filter(&self, query: String, config: FuzzyConfig, limit: Option<u32>) -> Vec<FuzzyHit> {
+        #[cfg(feature = "advanced_modes")]
         if config.mode != MatchMode::Fuzzy {
             return self.filter_nonfuzzy(&query, &config, limit);
         }
@@ -783,6 +826,7 @@ mod tests {
         FuzzyConfig::default()
     }
 
+    #[cfg(feature = "advanced_modes")]
     fn cfg_mode(mode: MatchMode) -> FuzzyConfig {
         FuzzyConfig {
             mode,
@@ -868,9 +912,10 @@ mod tests {
         assert!(fuzzy_match("rust".into(), "RUST".into(), cfg()).is_some());
     }
 
-    // ── 简单 / 子序列模式 ──
+    // ── 简单 / 子序列模式（仅 advanced_modes） ──
 
     #[test]
+    #[cfg(feature = "advanced_modes")]
     fn substring_mode() {
         let items = vec![
             "Super Gems 1000".to_string(),
@@ -887,6 +932,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "advanced_modes")]
     fn prefix_mode() {
         let items = vec![
             "Super Gems".to_string(),
@@ -900,6 +946,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "advanced_modes")]
     fn word_mode_full_equality() {
         let items = vec![
             "gem".to_string(),
@@ -913,6 +960,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "advanced_modes")]
     fn simple_mode_original_order_and_limit() {
         let items = vec![
             "ax".to_string(),
@@ -927,6 +975,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "advanced_modes")]
     fn simple_case_sensitive_per_query() {
         let items = vec!["gem".to_string(), "GEM".to_string()];
         let cs = FuzzyConfig {
@@ -942,6 +991,7 @@ mod tests {
     // ── 缓存语料 ──
 
     #[test]
+    #[cfg(feature = "advanced_modes")]
     fn corpus_matches_stateless_all_modes() {
         let items = vec![
             "Super Gems".to_string(),
@@ -980,9 +1030,12 @@ mod tests {
         assert_eq!(before.len(), freed.len());
         corpus.rehydrate();
         assert!(corpus.is_hydrated());
-        // 折叠副本应随 rehydrate 恢复（keep_folded=true）。
-        let icase = corpus.filter("GEM".into(), cfg_mode(MatchMode::Substring), None);
-        let _ = icase; // 不 panic 即可
+        // 折叠副本（advanced_modes）或基础 fuzzy 均不 panic 即可。
+        #[cfg(feature = "advanced_modes")]
+        {
+            let icase = corpus.filter("GEM".into(), cfg_mode(MatchMode::Substring), None);
+            let _ = icase;
+        }
     }
 
     #[test]
@@ -994,6 +1047,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "parallel")]
     fn parallel_matches_serial_large() {
         // 构造 > PARALLEL_THRESHOLD 条触发多核,比对 parallel/serial 结果完全一致(确定性)。
         let items: Vec<String> =
@@ -1019,6 +1073,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "advanced_modes")]
     fn incremental_matches_nonincremental() {
         let items: Vec<String> = (0..3000).map(|i| format!("dragon gem {i}")).collect();
         let corpus = FuzzyCorpus::new(items);
@@ -1040,6 +1095,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "advanced_modes")]
     fn incremental_invalidated_on_mutation() {
         let mut corpus =
             FuzzyCorpus::new(vec!["dragon".to_string(), "drag".to_string()]);
@@ -1057,18 +1113,19 @@ mod tests {
     #[test]
     fn limit_zero_returns_empty_all_modes() {
         let items = vec!["alpha".to_string(), "alto".to_string(), "beta".to_string()];
-        for mode in [
-            MatchMode::Fuzzy,
-            MatchMode::Substring,
-            MatchMode::Prefix,
-            MatchMode::Word,
-        ] {
+        // Fuzzy with limit=0 always returns empty (always available).
+        let r = fuzzy_filter("al".into(), items.clone(), cfg(), Some(0));
+        assert!(r.is_empty(), "limit=0 应返回空, mode=Fuzzy");
+        // Non-fuzzy modes only available in full (advanced_modes feature).
+        #[cfg(feature = "advanced_modes")]
+        for mode in [MatchMode::Substring, MatchMode::Prefix, MatchMode::Word] {
             let r = fuzzy_filter("al".into(), items.clone(), cfg_mode(mode), Some(0));
             assert!(r.is_empty(), "limit=0 应返回空, mode={mode:?}");
         }
     }
 
     #[test]
+    #[cfg(feature = "advanced_modes")]
     fn nonfuzzy_empty_query() {
         let items = vec!["a".to_string(), "".to_string(), "bc".to_string()];
         // Substring/Prefix 空查询恒真 -> 全中。
@@ -1087,6 +1144,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "advanced_modes")]
     fn incremental_backspace_and_rewrite() {
         let items: Vec<String> = (0..500).map(|i| format!("dragon gem {i}")).collect();
         let corpus = FuzzyCorpus::new(items);
@@ -1110,6 +1168,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "advanced_modes")]
     fn incremental_invalidated_on_ignore_case_change() {
         // ci=false "a" 只命中小写 'a'(idx 1,2);切到 ci=true "ab" 应能命中 "AB"(idx0)。
         // 若缺 ignore_case 守卫而复用旧命中集 {1,2},会漏掉 idx0。
@@ -1134,6 +1193,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "advanced_modes")]
     fn unicode_folding_substring_no_panic() {
         // İ(U+0130)折叠成两个 char,折叠改变字符数。验证 substring 不 panic、下标可用。
         // (已知限制:此类字符折叠路径下高亮下标可能与原串轻微错位,见模块头注释。)

@@ -6,6 +6,13 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "staticlib"]
 
+[features]
+# Full feature set (default): multi-core parallel search + non-fuzzy MatchModes + incremental cache.
+# Lite build (--no-default-features): pure fuzzy-only, single-threaded → ~254 KB vs ~531 KB.
+default = ["parallel", "advanced_modes"]
+parallel = []       # multi-core scan_haystacks + parallel build_haystacks index
+advanced_modes = [] # Substring/Prefix/Word MatchModes + per-query folded cache + incremental cache
+
 [dependencies]
 flutter_rust_bridge = "=2.12.0"
 nucleo-matcher = "0.3"

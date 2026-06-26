@@ -1,6 +1,6 @@
 name: Precompile Binaries
 
-# 手动触发:Actions 页点 "Run workflow",可选体积档位。
+# 手动触发:Actions 页点 "Run workflow",可选体积档位 + 是否同时编 lite。
 # 注意:改 rust/ 源码或切换体积档位都会改变 crate-hash,需重跑本工作流并发新版本。
 on:
   workflow_dispatch:
@@ -13,6 +13,10 @@ on:
           - keep
           - extreme
           - safe
+      build_lite:
+        description: "同时编译 lite 变体(--no-default-features, ~254KB)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write   # 创建 Release、上传资产;prepare 还要把档位改动提交回仓库
@@ -96,26 +100,26 @@ jobs:
         working-directory: cargokit/build_tool
         run: dart pub get
 
-      - name: Precompile (desktop + iOS)
+      # ─── Full variant ─────────────────────────────────────────────────────
+
+      - name: Precompile full (desktop + iOS)
         if: ${{ matrix.kind == 'desktop' }}
         working-directory: cargokit/build_tool
         env:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 极致压缩档才加 immediate-abort;只作用于带 --target 的产物,不污染 host proc-macro。
           RUSTFLAGS: ${{ steps.sp.outputs.extreme == '1' && '-Zunstable-options -Cpanic=immediate-abort' || '' }}
         run: >
           dart run build_tool precompile-binaries -v
           --manifest-dir=../../rust
           --repository=icodejoo/ffuzzy
 
-      - name: Precompile (linux-x64 + Android)
+      - name: Precompile full (linux-x64 + Android)
         if: ${{ matrix.kind == 'android' }}
         working-directory: cargokit/build_tool
         env:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 极致压缩档才加 immediate-abort;android 不走 zigbuild,无 host cargo install 被污染之虞。
           RUSTFLAGS: ${{ steps.sp.outputs.extreme == '1' && '-Zunstable-options -Cpanic=immediate-abort' || '' }}
         run: >
           dart run build_tool precompile-binaries -v
@@ -125,11 +129,7 @@ jobs:
           --android-ndk-version=28.2.13676358
           --android-min-sdk-version=21
 
-      # 用 cargo-zigbuild 在 x86_64 上交叉编译 ARM64 Linux,
-      # --glibc-version=2.17 钉死 glibc 下限(manylinux2014 基线),最大化可移植性。
-      # 此 job 不设 RUSTFLAGS immediate-abort:cargokit 会 `cargo install cargo-zigbuild`(host 编译),
-      # immediate-abort 无 build-std 会让该 install 编不过。故 arm64 仅用 build-std(体积略大于其他平台,可接受)。
-      - name: Precompile (linux arm64, cross)
+      - name: Precompile full (linux arm64, cross)
         if: ${{ matrix.kind == 'cross-linux' }}
         working-directory: cargokit/build_tool
         env:
@@ -138,6 +138,66 @@ jobs:
         run: >
           dart run build_tool precompile-binaries -v
           --manifest-dir=../../rust
+          --repository=icodejoo/ffuzzy
+          --target=aarch64-unknown-linux-gnu
+          --glibc-version=2.17
+
+      # ─── Lite variant (--no-default-features) ─────────────────────────────
+      # 创建干净的临时 manifest 目录,只包含 Cargo.toml + src/ + cargokit.yaml(lite版)。
+      #
+      # 关键设计:CI 和用户本地 Gradle/podspec 创建的目录文件集合完全相同
+      # (仅 Cargo.toml + src/ + cargokit.yaml),因此 cargokit 计算的 crate-hash 一致。
+      # 用户只需 import 'package:ffuzzy/lite.dart',Gradle 自动扫描到该 import,
+      # 指向 lite manifest 目录,cargokit 自动从 precompiled_lite_<hash> Release 下载。
+      # 无需任何构建参数。
+
+      # 在仓库根目录创建临时 manifest 目录(相对路径,全平台通用,无需处理 Windows/Unix 路径差异)。
+      # cargokit/build_tool 的 working-directory 下 ../../ffuzzy_lite_manifest 即为仓库根下该目录。
+      - name: Create lite manifest dir
+        if: ${{ inputs.build_lite }}
+        shell: bash
+        run: |
+          mkdir -p ffuzzy_lite_manifest/src
+          cp rust/Cargo.toml ffuzzy_lite_manifest/
+          cp -r rust/src/. ffuzzy_lite_manifest/src/
+          cp rust/cargokit_lite.yaml ffuzzy_lite_manifest/cargokit.yaml
+          echo "Lite manifest contents:"
+          find ffuzzy_lite_manifest -type f | sort
+
+      - name: Precompile lite (desktop + iOS)
+        if: ${{ inputs.build_lite && matrix.kind == 'desktop' }}
+        working-directory: cargokit/build_tool
+        env:
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          dart run build_tool precompile-binaries -v
+          --manifest-dir=../../ffuzzy_lite_manifest
+          --repository=icodejoo/ffuzzy
+
+      - name: Precompile lite (linux-x64 + Android)
+        if: ${{ inputs.build_lite && matrix.kind == 'android' }}
+        working-directory: cargokit/build_tool
+        env:
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          dart run build_tool precompile-binaries -v
+          --manifest-dir=../../ffuzzy_lite_manifest
+          --repository=icodejoo/ffuzzy
+          --android-sdk-location=$ANDROID_SDK_ROOT
+          --android-ndk-version=28.2.13676358
+          --android-min-sdk-version=21
+
+      - name: Precompile lite (linux arm64, cross)
+        if: ${{ inputs.build_lite && matrix.kind == 'cross-linux' }}
+        working-directory: cargokit/build_tool
+        env:
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          dart run build_tool precompile-binaries -v
+          --manifest-dir=../../ffuzzy_lite_manifest
           --repository=icodejoo/ffuzzy
           --target=aarch64-unknown-linux-gnu
           --glibc-version=2.17

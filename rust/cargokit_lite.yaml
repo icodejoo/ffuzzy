@@ -1,0 +1,23 @@
+# Lite precompiled binaries — fuzzy-only, ~254 KB (vs ~531 KB full).
+#
+# Built with --no-default-features (no parallel, no advanced_modes).
+# The release tag is precompiled_lite_<crate-hash>, separate from full.
+#
+# Users simply import 'package:ffuzzy/lite.dart'.  The Gradle plugin and iOS
+# podspec automatically detect this import and tell cargokit to fetch the lite
+# binary.  No build flags or manual steps are needed.
+#
+# Regenerate lite binaries: run .github/workflows/precompile_binaries.yml
+# with build_lite=true (the default).
+precompiled_binaries:
+  url_prefix: "https://github.com/icodejoo/ffuzzy/releases/download/precompiled_lite_"
+  public_key: "96cfa1f593d459d7e61e3e53cc5eb2fb03e6eb8ce8469de7e978265925edfa38"
+
+# size-profile:buildstd:begin
+cargo:
+  release:
+    toolchain: nightly
+    extra_flags:
+      - "--no-default-features"
+      - "-Zbuild-std=std,panic_abort"
+# size-profile:buildstd:end

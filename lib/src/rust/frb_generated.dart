@@ -147,8 +147,6 @@ abstract class RustLibApi extends BaseApi {
       required String haystack,
       required FuzzyConfig config});
 
-  String crateApiSimpleGreet({required String name});
-
   Future<void> crateApiSimpleInitApp();
 
   RustArcIncrementStrongCountFnType
@@ -681,29 +679,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(
         debugName: "fuzzy_match_indices",
         argNames: ["query", "haystack", "config"],
-      );
-
-  @override
-  String crateApiSimpleGreet({required String name}) {
-    return handler.executeSync(SyncTask(
-      callFfi: () {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(name, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateApiSimpleGreetConstMeta,
-      argValues: [name],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateApiSimpleGreetConstMeta => const TaskConstMeta(
-        debugName: "greet",
-        argNames: ["name"],
       );
 
   @override

@@ -1,10 +1,6 @@
-#[flutter_rust_bridge::frb(sync)] // Synchronous mode for simplicity of the demo
-pub fn greet(name: String) -> String {
-    format!("Hello, {name}!")
-}
-
 #[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
-    // Default utilities - feel free to customize
-    flutter_rust_bridge::setup_default_user_utils();
+    // setup_default_user_utils sets up a non-WASM panic hook; with panic=abort
+    // in release the hook is never invoked, but the code still gets linked.
+    // Keep empty here; callers still get proper FRB initialization via frb_generated.
 }
