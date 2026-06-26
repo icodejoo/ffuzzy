@@ -188,9 +188,30 @@ ffuzzy_results_t *thread_pool_filter(ffuzzy_corpus_t *corpus,
     /* Decode query to UTF-32 */
     uint32_t *pat_u32 = NULL;
     int       pat_len = 0;
-    if (utf8_to_utf32(query, &pat_u32, &pat_len) != 0 || pat_len == 0) {
+    if (utf8_to_utf32(query, &pat_u32, &pat_len) != 0) {
         free(pat_u32);
-        ffuzzy_results_t *r = (ffuzzy_results_t *)calloc(1, sizeof(ffuzzy_results_t));
+        return NULL;
+    }
+
+    /* Empty query: return all corpus items with score 0 */
+    if (pat_len == 0) {
+        free(pat_u32);
+        ffuzzy_hit_t *hits = (ffuzzy_hit_t *)calloc(total, sizeof(ffuzzy_hit_t));
+        if (!hits) return NULL;
+        for (uint32_t i = 0; i < total; i++) {
+            hits[i].index       = i;
+            hits[i].score       = 0;
+            hits[i].indices     = NULL;
+            hits[i].indices_len = 0;
+        }
+        uint32_t result_len = total;
+        /* Apply limit */
+        /* (limit == 0 means no limit) */
+        if (limit > 0 && result_len > limit) result_len = limit;
+        ffuzzy_results_t *r = (ffuzzy_results_t *)malloc(sizeof(ffuzzy_results_t));
+        if (!r) { free(hits); return NULL; }
+        r->hits = hits;
+        r->len  = result_len;
         return r;
     }
 
