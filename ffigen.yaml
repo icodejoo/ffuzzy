@@ -1,0 +1,46 @@
+# ffigen configuration for generating Dart FFI bindings from src/ffuzzy.h
+#
+# Run with:
+#   dart run ffigen --config ffigen.yaml
+#
+# Output overwrites lib/src/bindings.dart.
+
+name: FfuzzyBindings
+description: 'Auto-generated FFI bindings for the ffuzzy C library.'
+
+output: 'lib/src/bindings.dart'
+
+headers:
+  entry-points:
+    - 'src/ffuzzy.h'
+  include-directives:
+    - 'src/ffuzzy.h'
+
+compiler-opts:
+  - '-Isrc'
+
+functions:
+  include:
+    - 'ffuzzy_corpus_new'
+    - 'ffuzzy_corpus_add'
+    - 'ffuzzy_corpus_len'
+    - 'ffuzzy_corpus_free'
+    - 'ffuzzy_filter'
+    - 'ffuzzy_results_free'
+
+structs:
+  include:
+    - 'ffuzzy_hit_t'
+    - 'ffuzzy_results_t'
+    - 'ffuzzy_corpus'
+
+typedefs:
+  include:
+    - 'ffuzzy_corpus_t'
+    - 'ffuzzy_hit_t'
+    - 'ffuzzy_results_t'
+
+preamble: |
+  // ignore_for_file: camel_case_types
+  // ignore_for_file: non_constant_identifier_names
+  // ignore_for_file: unused_element

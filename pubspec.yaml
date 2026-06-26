@@ -1,0 +1,37 @@
+name: ffuzzy
+description: >
+  A Flutter FFI plugin for fast fuzzy string matching using a C implementation
+  of the Smith-Waterman DP algorithm with camelCase / boundary bonuses, a
+  64-bit bitmap prefilter, and a parallel thread-pool search.
+version: 0.1.0
+homepage: https://github.com/placeholder/ffuzzy
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: "^2.0.0"
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  ffigen: "^13.0.0"
+
+# Plugin registration — tells Flutter's build system to compile the native
+# library via the platform-specific CMakeLists.txt / podspec.
+flutter:
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      ios:
+        ffiPlugin: true
+      linux:
+        ffiPlugin: true
+      macos:
+        ffiPlugin: true
+      windows:
+        ffiPlugin: true
