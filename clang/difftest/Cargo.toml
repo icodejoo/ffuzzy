@@ -1,0 +1,21 @@
+[package]
+name = "ffz-difftest"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "difftest_rust"
+path = "src/main.rs"
+
+# Emits ../src/ffz_class_table.c — the exact non-ASCII char classification,
+# reproducing nucleo's char_class_non_ascii from the same rustc/Unicode version.
+[[bin]]
+name = "gen_class_table"
+path = "src/bin/gen_class_table.rs"
+
+[dependencies]
+# Same engine and version the ffuzzy `rust/` crate wraps.
+nucleo-matcher = "0.3"
+
+[profile.release]
+opt-level = 2

@@ -29,6 +29,12 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # dart:ffi helpers (Utf8) for the C-engine comparison integration test.
+  ffi: ^2.1.0
+  # The C-engine Dart binding (clang/), compared against the Rust engine.
+  ffz:
+    path: ../clang/dart
+
 dev_dependencies:
   integration_test:
     sdk: flutter
