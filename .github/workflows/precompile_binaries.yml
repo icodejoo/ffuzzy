@@ -170,6 +170,7 @@ jobs:
         env:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUSTFLAGS: "-Zunstable-options -Cpanic=immediate-abort"
         run: >
           dart run build_tool precompile-binaries -v
           --manifest-dir=../../ffuzzy_lite_manifest
@@ -181,6 +182,7 @@ jobs:
         env:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUSTFLAGS: "-Zunstable-options -Cpanic=immediate-abort"
         run: >
           dart run build_tool precompile-binaries -v
           --manifest-dir=../../ffuzzy_lite_manifest
@@ -195,6 +197,7 @@ jobs:
         env:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUSTFLAGS: "-Zunstable-options -Cpanic=immediate-abort"
         run: >
           dart run build_tool precompile-binaries -v
           --manifest-dir=../../ffuzzy_lite_manifest
