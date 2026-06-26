@@ -21,6 +21,13 @@ if(UNIX)
     target_link_libraries(ffuzzy_integration pthread)
 endif()
 
+add_executable(ffuzzy_adversarial test_adversarial.c ${FFUZZY_SOURCES})
+target_include_directories(ffuzzy_adversarial PRIVATE ../src)
+if(UNIX)
+    target_link_libraries(ffuzzy_adversarial pthread)
+endif()
+
 enable_testing()
 add_test(NAME unit        COMMAND ffuzzy_test)
 add_test(NAME integration COMMAND ffuzzy_integration)
+add_test(NAME adversarial COMMAND ffuzzy_adversarial)
