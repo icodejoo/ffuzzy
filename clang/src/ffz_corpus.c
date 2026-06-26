@@ -43,6 +43,56 @@ ffz_parallel ffz_parallel_off(void) { ffz_parallel p = {false, 0}; return p; }
 ffz_parallel ffz_parallel_auto(void) { ffz_parallel p = {true, 0}; return p; }
 ffz_parallel ffz_parallel_with(int t) { ffz_parallel p = {true, t}; return p; }
 
+// --- string arena ----------------------------------------------------------
+// Key bytes/codepoints are bump-allocated from large blocks, so a corpus of N
+// keys does N cheap pointer bumps instead of N malloc()s (less per-allocation
+// heap overhead and fragmentation). Keys are never freed piecemeal; the whole
+// arena is released on clear/free. 8-byte alignment fits uint32_t codepoints.
+typedef struct ffz_arena_block {
+    struct ffz_arena_block *next;
+    size_t used, cap;
+    // payload bytes follow the header
+} ffz_arena_block;
+#define FFZ_ARENA_BLOCK (64 * 1024)
+typedef struct { ffz_arena_block *head; } ffz_arena;
+
+static inline unsigned char *blk_data(ffz_arena_block *b) {
+    return (unsigned char *)b + sizeof(ffz_arena_block);
+}
+// Returns NULL on OOM; callers drop the key (file-wide drop-on-OOM policy).
+static void *arena_alloc(ffz_arena *a, size_t n) {
+    n = (n + 7u) & ~(size_t)7u;  // 8-byte align (fits uint32_t codepoints)
+    ffz_arena_block *b = a->head;
+    if (b && b->used + n <= b->cap) {  // fits the current head block
+        void *p = blk_data(b) + b->used;
+        b->used += n;
+        return p;
+    }
+    size_t cap = n > FFZ_ARENA_BLOCK ? n : FFZ_ARENA_BLOCK;
+    ffz_arena_block *nb = (ffz_arena_block *)malloc(sizeof(*nb) + cap);
+    if (!nb) return NULL;
+    nb->cap = cap;
+    nb->used = n;
+    if (n > FFZ_ARENA_BLOCK && b) {
+        // Oversized dedicated block: splice it BEHIND the head so the head's
+        // remaining tail stays available for subsequent small allocations.
+        nb->next = b->next;
+        b->next = nb;
+    } else {
+        nb->next = a->head;
+        a->head = nb;
+    }
+    return blk_data(nb);
+}
+static void arena_free(ffz_arena *a) {
+    for (ffz_arena_block *b = a->head; b;) {
+        ffz_arena_block *n = b->next;
+        free(b);
+        b = n;
+    }
+    a->head = NULL;
+}
+
 // Compact key: one data pointer (bytes XOR codepoints) + small fields = 16 B
 // (was 32 B with two pointers, one always NULL).
 typedef struct {
@@ -74,32 +124,29 @@ static inline ffz_str key_str(const corpus_key *k) {
 
 struct ffz_corpus {
     ffz_config cfg;
-    ffz_matcher *m;
     corpus_item *items;
     size_t n, cap;
     ffz_transliterator hook;
     void *hook_ctx;
     size_t max_keys;
     ffz_str_buf scratch;
+    ffz_arena arena;  // owns all key byte/codepoint storage
 };
 
 ffz_corpus *ffz_corpus_new(ffz_config cfg) {
     ffz_corpus *c = (ffz_corpus *)calloc(1, sizeof(*c));
     if (!c) return NULL;
     c->cfg = cfg;
-    c->m = ffz_matcher_new(cfg);
-    if (!c->m) { free(c); return NULL; }
+    // No shared matcher: each filter() call (and each worker thread) owns its
+    // own matcher, so concurrent read-only filters never race on scratch.
     return c;
 }
 
-static void free_item(corpus_item *it) {
-    free(it->key0.data);
-    for (size_t k = 0; k < it->n_extra; k++) free(it->extra[k].data);
-    free(it->extra);
-}
-
 void ffz_corpus_clear(ffz_corpus *c) {
-    for (size_t i = 0; i < c->n; i++) free_item(&c->items[i]);
+    // Key data lives in the arena (released wholesale); only the per-item
+    // `extra` key array is individually heap-allocated.
+    for (size_t i = 0; i < c->n; i++) free(c->items[i].extra);
+    arena_free(&c->arena);
     c->n = 0;
 }
 
@@ -107,7 +154,6 @@ void ffz_corpus_free(ffz_corpus *c) {
     if (!c) return;
     ffz_corpus_clear(c);
     free(c->items);
-    ffz_matcher_free(c->m);
     ffz_str_buf_free(&c->scratch);
     free(c);
 }
@@ -121,7 +167,10 @@ void ffz_corpus_set_transliterator(ffz_corpus *c, ffz_transliterator fn,
 
 size_t ffz_corpus_len(const ffz_corpus *c) { return c->n; }
 
-// Decode UTF-8 and store an owned copy in the key (bytes if ASCII, else cps).
+// Decode UTF-8 and store an owned copy of the key in the arena (bytes if ASCII,
+// else codepoints). On arena OOM the key degrades to empty (data NULL, len 0).
+// Uses the corpus-wide `c->scratch`, so this is add-path (single-threaded) only
+// — filtering never calls it. Do not invoke from worker threads.
 static void dup_key(ffz_corpus *c, const char *s, size_t n, int kind,
                     corpus_key *out) {
     ffz_str v = ffz_str_from_utf8(s, n, &c->scratch);
@@ -129,45 +178,65 @@ static void dup_key(ffz_corpus *c, const char *s, size_t n, int kind,
     out->len = (uint32_t)v.len;
     if (v.b) {
         out->ascii = 1;
-        uint8_t *p = (uint8_t *)malloc(v.len ? v.len : 1);
-        memcpy(p, v.b, v.len);
+        uint8_t *p = (uint8_t *)arena_alloc(&c->arena, v.len ? v.len : 1);
+        if (p && v.len) memcpy(p, v.b, v.len);
         out->data = p;
+        if (!p) out->len = 0;
     } else {
         out->ascii = 0;
-        uint32_t *p = (uint32_t *)malloc((v.len ? v.len : 1) * sizeof(uint32_t));
-        memcpy(p, v.u, v.len * sizeof(uint32_t));
+        uint32_t *p = (uint32_t *)arena_alloc(&c->arena,
+                                              (v.len ? v.len : 1) * sizeof(uint32_t));
+        if (p && v.len) memcpy(p, v.u, v.len * sizeof(uint32_t));
         out->data = p;
+        if (!p) out->len = 0;
     }
 }
 
-void ffz_corpus_add(ffz_corpus *c, const char *item, size_t len) {
+// Build one item = [ORIGINAL, extra_keys...] and append it. Shared by the
+// hook-driven add and the explicit add_keyed. Degrades gracefully on OOM.
+static void emit_item(ffz_corpus *c, const char *item, size_t len,
+                      const ffz_key *ek, size_t extra) {
     if (c->n == c->cap) {
-        c->cap = c->cap ? c->cap * 2 : 16;
-        c->items = (corpus_item *)realloc(c->items, c->cap * sizeof(corpus_item));
+        size_t ncap = c->cap ? c->cap * 2 : 16;
+        corpus_item *ni = (corpus_item *)realloc(c->items, ncap * sizeof(corpus_item));
+        if (!ni) return;  // OOM: drop this add rather than deref NULL
+        c->items = ni;
+        c->cap = ncap;
     }
     corpus_item *it = &c->items[c->n];
+    dup_key(c, item, len, FFZ_KEY_ORIGINAL, &it->key0);
+    it->extra = NULL;
+    it->n_extra = 0;
+    if (extra > 0) {
+        corpus_key *xk = (corpus_key *)malloc(extra * sizeof(corpus_key));
+        if (xk) {  // OOM: keep just the ORIGINAL key rather than deref NULL
+            for (size_t k = 0; k < extra; k++)
+                dup_key(c, ek[k].text, ek[k].len, ek[k].kind, &xk[k]);
+            it->extra = xk;
+            it->n_extra = (uint32_t)extra;
+        }
+    }
+    c->n++;
+}
 
+void ffz_corpus_add(ffz_corpus *c, const char *item, size_t len) {
     // Gather alternate keys from the hook (if any), then build [ORIGINAL, ...].
     size_t extra = 0;
     ffz_key *tmp = NULL;
     if (c->hook && c->max_keys > 0) {
         tmp = (ffz_key *)calloc(c->max_keys, sizeof(ffz_key));
-        extra = c->hook(item, len, c->hook_ctx, tmp, c->max_keys);
-        if (extra > c->max_keys) extra = c->max_keys;
+        if (tmp) {
+            extra = c->hook(item, len, c->hook_ctx, tmp, c->max_keys);
+            if (extra > c->max_keys) extra = c->max_keys;
+        }
     }
-
-    dup_key(c, item, len, FFZ_KEY_ORIGINAL, &it->key0);
-    if (extra > 0) {
-        it->extra = (corpus_key *)malloc(extra * sizeof(corpus_key));
-        for (size_t k = 0; k < extra; k++)
-            dup_key(c, tmp[k].text, tmp[k].len, tmp[k].kind, &it->extra[k]);
-        it->n_extra = (uint32_t)extra;
-    } else {
-        it->extra = NULL;
-        it->n_extra = 0;
-    }
+    emit_item(c, item, len, tmp, extra);
     free(tmp);
-    c->n++;
+}
+
+void ffz_corpus_add_keyed(ffz_corpus *c, const char *item, size_t len,
+                          const ffz_key *keys, size_t nkeys) {
+    emit_item(c, item, len, keys, nkeys);
 }
 
 // --- filtering ------------------------------------------------------------
@@ -224,8 +293,11 @@ static void scored_topk(const scored *sc, size_t ns, size_t k, scored *out) {
 
 static void results_push(ffz_results *r, ffz_hit hit) {
     if (r->len == r->cap) {
-        r->cap = r->cap ? r->cap * 2 : 32;
-        r->hits = (ffz_hit *)realloc(r->hits, r->cap * sizeof(ffz_hit));
+        size_t ncap = r->cap ? r->cap * 2 : 32;
+        ffz_hit *h = (ffz_hit *)realloc(r->hits, ncap * sizeof(ffz_hit));
+        if (!h) { ffz_indices_free(&hit.indices); return; }  // OOM: drop hit
+        r->hits = h;
+        r->cap = ncap;
     }
     r->hits[r->len++] = hit;
 }
@@ -237,12 +309,41 @@ void ffz_results_free(ffz_results *r) {
     r->len = r->cap = 0;
 }
 
-// Pass 1 over items [lo,hi): pick each item's best-scoring key. `m` is a
-// matcher private to this caller/thread; `pat` is shared read-only. Writes
-// compactly into `out` and returns the number of matched items.
-static size_t scan_range(ffz_corpus *c, ffz_matcher *m, const ffz_pattern *pat,
-                         size_t lo, size_t hi, scored *out) {
-    size_t n = 0;
+// A scored collector: either append-all (bounded=false) or keep only the
+// best `cap` via a bounded min-heap (root = worst), so a worker that only has
+// to surface the global top-`limit` never materializes more than `limit` rows.
+typedef struct {
+    scored *buf;
+    size_t n, cap;
+    bool bounded;
+} collector;
+
+static void coll_push(collector *col, scored s) {
+    if (!col->bounded) {
+        col->buf[col->n++] = s;
+        return;
+    }
+    if (col->n < col->cap) {  // sift-up into a min-heap on rank
+        size_t j = col->n++;
+        col->buf[j] = s;
+        while (j > 0) {
+            size_t p = (j - 1) / 2;
+            if (scored_worse(col->buf[j], col->buf[p])) {
+                scored t = col->buf[p]; col->buf[p] = col->buf[j]; col->buf[j] = t;
+                j = p;
+            } else break;
+        }
+    } else if (col->cap && scored_worse(col->buf[0], s)) {
+        col->buf[0] = s;             // displace the current worst
+        scored_sift(col->buf, col->cap, 0);
+    }
+}
+
+// Pass 1 over items [lo,hi): pick each item's best-scoring key and push it to
+// `col`. `m` is a matcher private to this caller/thread; `pat` is shared
+// read-only.
+static void scan_range(ffz_corpus *c, ffz_matcher *m, const ffz_pattern *pat,
+                       size_t lo, size_t hi, collector *col) {
     for (size_t i = lo; i < hi; i++) {
         corpus_item *it = &c->items[i];
         int32_t best = -1;
@@ -259,43 +360,48 @@ static size_t scan_range(ffz_corpus *c, ffz_matcher *m, const ffz_pattern *pat,
             }
         }
         if (best >= 0) {
-            out[n].item_index = (uint32_t)i;
-            out[n].score = best;
-            out[n].matched_kind = best_kind;
-            out[n].matched_key = best_key;
-            n++;
+            scored sc = {(uint32_t)i, best, best_kind, best_key};
+            coll_push(col, sc);
         }
     }
-    return n;
 }
 
 typedef struct {
     ffz_corpus *c;
     const ffz_pattern *pat;
     size_t lo, hi;
-    scored *out;  // capacity hi-lo
-    size_t n;     // filled by the worker
+    scored *out;   // capacity `cap`
+    size_t cap;    // = hi-lo (append-all) or `limit` (bounded top-K)
+    bool bounded;
+    size_t n;      // filled by the worker
 } scan_job;
 
 static void scan_job_run(scan_job *j) {
     // Each thread owns its matcher (the matcher holds mutable scratch).
     ffz_matcher *m = ffz_matcher_new(j->c->cfg);
-    j->n = m ? scan_range(j->c, m, j->pat, j->lo, j->hi, j->out) : 0;
+    if (m) {
+        collector col = {j->out, 0, j->cap, j->bounded};
+        scan_range(j->c, m, j->pat, j->lo, j->hi, &col);
+        j->n = col.n;
+    } else {
+        j->n = 0;
+    }
     ffz_matcher_free(m);
 }
 
 #if defined(_WIN32)
 static DWORD WINAPI scan_trampoline(LPVOID p) { scan_job_run((scan_job *)p); return 0; }
-static ffz_thr thr_start(scan_job *j) {
-    return CreateThread(NULL, 0, scan_trampoline, j, 0, NULL);
+static bool thr_start(scan_job *j, ffz_thr *out) {
+    HANDLE h = CreateThread(NULL, 0, scan_trampoline, j, 0, NULL);
+    if (!h) return false;
+    *out = h;
+    return true;
 }
 static void thr_join(ffz_thr t) { WaitForSingleObject(t, INFINITE); CloseHandle(t); }
 #else
 static void *scan_trampoline(void *p) { scan_job_run((scan_job *)p); return NULL; }
-static ffz_thr thr_start(scan_job *j) {
-    pthread_t t;
-    pthread_create(&t, NULL, scan_trampoline, j);
-    return t;
+static bool thr_start(scan_job *j, ffz_thr *out) {
+    return pthread_create(out, NULL, scan_trampoline, j) == 0;
 }
 static void thr_join(ffz_thr t) { pthread_join(t, NULL); }
 #endif
@@ -327,49 +433,82 @@ void ffz_corpus_filter(ffz_corpus *c, const char *query, size_t query_len,
     ffz_pattern *pat = (mode == FFZ_FUZZY)
                            ? ffz_pattern_parse(query, query_len, cm, nm)
                            : ffz_pattern_new(query, query_len, cm, nm, mode);
+    // A matcher private to this call (holds mutable scratch). Allocating it here
+    // — rather than sharing one on the corpus — makes ffz_corpus_filter
+    // reentrant: concurrent read-only filters (e.g. from filterAsync) never race.
+    ffz_matcher *fm = ffz_matcher_new(c->cfg);
+    if (!pat || !fm) {  // OOM: return no matches rather than crash/match-all
+        ffz_pattern_free(pat);
+        ffz_matcher_free(fm);
+        return;
+    }
 
     // Pass 1: best key per item (no indices). Optionally multi-threaded.
+    // On any allocation/thread failure we degrade gracefully (serial / fewer
+    // threads / inline) rather than crash.
     scored *sc = (scored *)malloc((c->n ? c->n : 1) * sizeof(scored));
     size_t ns = 0;
-    unsigned nthreads = resolve_threads(par, c->n);
+    unsigned nthreads = sc ? resolve_threads(par, c->n) : 0;
     if (nthreads <= 1) {
-        ns = scan_range(c, c->m, pat, 0, c->n, sc);
+        if (sc) {
+            collector col = {sc, 0, c->n, false};  // serial keeps all then sorts
+            scan_range(c, fm, pat, 0, c->n, &col);
+            ns = col.n;
+        }
     } else {
         size_t chunk = (c->n + nthreads - 1) / nthreads;
         scan_job *jobs = (scan_job *)calloc(nthreads, sizeof(scan_job));
         ffz_thr *ths = (ffz_thr *)calloc(nthreads, sizeof(ffz_thr));
-        unsigned spawned = 0;
-        for (unsigned t = 0; t < nthreads; t++) {
-            size_t lo = t * chunk;
-            if (lo >= c->n) break;
-            size_t hi = lo + chunk < c->n ? lo + chunk : c->n;
-            jobs[t] = (scan_job){c, pat, lo, hi,
-                                 (scored *)malloc((hi - lo) * sizeof(scored)), 0};
-            ths[t] = thr_start(&jobs[t]);
-            spawned++;
-        }
-        // Concatenate in ascending range order -> same order as the serial scan.
-        for (unsigned t = 0; t < spawned; t++) {
-            thr_join(ths[t]);
-            memcpy(sc + ns, jobs[t].out, jobs[t].n * sizeof(scored));
-            ns += jobs[t].n;
-            free(jobs[t].out);
+        char *started = (char *)calloc(nthreads, 1);
+        if (!jobs || !ths || !started) {
+            collector col = {sc, 0, c->n, false};  // serial fallback
+            scan_range(c, fm, pat, 0, c->n, &col);
+            ns = col.n;
+        } else {
+            unsigned spawned = 0;
+            for (unsigned t = 0; t < nthreads; t++) {
+                size_t lo = t * chunk;
+                if (lo >= c->n) break;
+                size_t hi = lo + chunk < c->n ? lo + chunk : c->n;
+                // Per-thread top-K: when a limit caps output below the chunk
+                // size, each worker keeps only its best `limit` (a global
+                // top-`limit` element is always in some chunk's top-`limit`),
+                // so the merged buffer is <= nthreads*limit instead of c->n.
+                bool bounded = (limit > 0 && limit < (hi - lo));
+                size_t cap = bounded ? limit : (hi - lo);
+                scored *obuf = (scored *)malloc(cap * sizeof(scored));
+                jobs[t] = (scan_job){c, pat, lo, hi, obuf, cap, bounded, 0};
+                spawned = t + 1;
+                if (!obuf) continue;  // OOM: this chunk yields 0 results
+                if (thr_start(&jobs[t], &ths[t])) started[t] = 1;
+                else scan_job_run(&jobs[t]);  // spawn failed: run inline
+            }
+            for (unsigned t = 0; t < spawned; t++) {
+                if (started[t]) thr_join(ths[t]);
+                if (jobs[t].out) {
+                    memcpy(sc + ns, jobs[t].out, jobs[t].n * sizeof(scored));
+                    ns += jobs[t].n;
+                    free(jobs[t].out);
+                }
+            }
         }
         free(jobs);
         free(ths);
+        free(started);
     }
 
     // When a limit caps the output well below the match count, select the
     // top-`limit` with a bounded heap instead of sorting everything.
     size_t keep;
-    if (limit && limit < ns) {
-        scored *top = (scored *)malloc(limit * sizeof(scored));
+    scored *top = (limit && limit < ns) ? (scored *)malloc(limit * sizeof(scored))
+                                        : NULL;
+    if (top) {
         scored_topk(sc, ns, limit, top);
         free(sc);
         sc = top;
         keep = limit;
     } else {
-        qsort(sc, ns, sizeof(scored), cmp_scored);
+        if (ns) qsort(sc, ns, sizeof(scored), cmp_scored);  // NULL/0-safe
         keep = ns;
     }
 
@@ -384,11 +523,12 @@ void ffz_corpus_filter(ffz_corpus *c, const char *query, size_t query_len,
         hit.indices.len = hit.indices.cap = 0;
         corpus_item *it = &c->items[sc[r].item_index];
         const corpus_key *key = item_key(it, sc[r].matched_key);
-        ffz_pattern_match(c->m, pat, key_str(key), &hit.indices);
+        ffz_pattern_match(fm, pat, key_str(key), &hit.indices);
         ffz_indices_sort_dedup(&hit.indices);
         results_push(out, hit);
     }
 
     free(sc);
+    ffz_matcher_free(fm);
     ffz_pattern_free(pat);
 }

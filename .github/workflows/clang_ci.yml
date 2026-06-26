@@ -1,0 +1,204 @@
+name: clang (C engine)
+
+# Functional + safety verification of the C matcher and its Dart FFI binding
+# across Linux / macOS / Windows / Android: unit + leak + differential (vs Rust
+# nucleo) tests, ASan/UBSan, a libFuzzer run, the native crash handler, the
+# CMake debug/release auto-switch, Apple compiles, and an end-to-end Dart smoke.
+on:
+  push:
+    paths: ['clang/**', '.github/workflows/clang_ci.yml']
+  pull_request:
+    paths: ['clang/**', '.github/workflows/clang_ci.yml']
+
+jobs:
+  unit-leak:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: unit tests (exact)
+        run: cd clang && make test
+      - name: unit tests (compact class table)
+        run: |
+          cd clang && mkdir -p build
+          cc -std=c11 -O2 -Wall -Wextra -DFFZ_COMPACT_CLASS \
+            -Iinclude src/*.c tests/test_ffz.c -o build/tc && ./build/tc
+      - name: leak smoke test
+        run: cd clang && make leak
+
+  unit-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: unit tests (MSVC)
+        shell: cmd
+        run: |
+          cd clang
+          cl /nologo /W3 /O2 /Iinclude src/*.c tests/test_ffz.c /Fe:tc.exe
+          tc.exe
+      - name: leak test (MSVC) — covers the Win32 CreateThread path
+        shell: cmd
+        run: |
+          cd clang
+          cl /nologo /W3 /O2 /DFFZ_TRACK_ALLOC /Iinclude src/*.c tests/test_leak.c /Fe:tl.exe
+          tl.exe
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ASan + UBSan (unit + leak)
+        run: |
+          cd clang && mkdir -p build
+          gcc -std=c11 -O1 -g -fsanitize=address,undefined \
+            -fno-sanitize-recover=all -Iinclude src/*.c tests/test_ffz.c \
+            -o build/tsan && ./build/tsan
+          gcc -std=c11 -O1 -g -fsanitize=address,undefined \
+            -fno-sanitize-recover=all -DFFZ_TRACK_ALLOC \
+            -Iinclude src/*.c tests/test_leak.c -o build/tlsan && ./build/tlsan
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: libFuzzer (60s, ASan+UBSan)
+        run: |
+          cd clang && mkdir -p build
+          clang -std=c11 -g -O1 -fsanitize=fuzzer,address,undefined \
+            -fno-sanitize-recover=all -Iinclude \
+            src/*.c ffi/ffz_ffi.c tests/fuzz_ffz.c -o build/fuzz_ffz
+          ./build/fuzz_ffz -max_total_time=60 -rss_limit_mb=2048 -print_final_stats=1
+      - name: upload fuzz crash reproducer (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash
+          path: |
+            clang/crash-*
+            clang/oom-*
+            clang/timeout-*
+          if-no-files-found: ignore
+
+  difftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: differential test vs nucleo (score + indices, 6210 pairs)
+        run: cd clang/difftest && bash run.sh
+
+  crash-handler:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: forced crash -> handler prints + persists a backtrace
+        shell: bash
+        run: |
+          cd clang
+          cc -g -O0 -funwind-tables -fno-omit-frame-pointer -Iinclude \
+            tools/crash_smoke.c ffi/ffz_crash.c -ldl -o crash_smoke
+          ./crash_smoke crash.log > /dev/null 2> err.txt || true
+          echo "--- stderr ---"; cat err.txt
+          echo "--- breadcrumb ---"; cat crash.log
+          grep -q "ffz native crash" err.txt
+          grep -q "ffz native crash" crash.log
+          grep -q "boom" crash.log
+
+  crash-handler-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: forced crash -> handler prints func:line via PDB
+        shell: cmd
+        run: |
+          cd clang
+          cl /nologo /Zi /Od /Iinclude tools\crash_smoke.c ffi\ffz_crash.c /link dbghelp.lib /OUT:crash_smoke.exe
+          crash_smoke.exe crash.log 1> out.txt 2>&1
+          type crash.log
+          findstr /C:"ffz native crash" crash.log || exit /b 1
+          findstr /C:"crash_smoke.c" crash.log || exit /b 1
+
+  android-ndk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build release (~32 KB, no handler) + selfdebug (handler) per ABI
+        run: |
+          cd clang
+          export ANDROID_NDK="$ANDROID_NDK_LATEST_HOME"
+          export FFZ_NDK_HOST=linux-x86_64
+          echo "== release ==";   bash scripts/build_android.sh
+          echo "== selfdebug =="; FFZ_SELFDEBUG=1 bash scripts/build_android.sh
+      - name: assert release omits the crash symbol, selfdebug includes it
+        run: |
+          cd clang
+          NM="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+          # release was overwritten by selfdebug above; rebuild release to check
+          export ANDROID_NDK="$ANDROID_NDK_LATEST_HOME" FFZ_NDK_HOST=linux-x86_64
+          bash scripts/build_android.sh > /dev/null
+          test "$("$NM" -D build/android/arm64-v8a/libffz.so | grep -c crash_handler)" = "0"
+          test -f build/android/arm64-v8a/libffz.so.debug   # sidecar exists
+          FFZ_SELFDEBUG=1 bash scripts/build_android.sh > /dev/null
+          test "$("$NM" build/android/arm64-v8a/libffz.so | grep -c crash_handler)" -ge "1"
+
+  desktop-cmake:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: configure + build Debug (locatable) and Release (compressed)
+        shell: bash
+        run: |
+          cd clang
+          for cfg in Debug Release; do
+            cmake -S . -B "build/cmake-$cfg" -DCMAKE_BUILD_TYPE=$cfg
+            cmake --build "build/cmake-$cfg" --config $cfg
+          done
+
+  apple-targets:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: compile sources for iOS-arm64 and macOS (podspec inputs)
+        run: |
+          cd clang
+          XCRUN=$(command -v xcrun)
+          IOS_SDK=$("$XCRUN" --sdk iphoneos --show-sdk-path)
+          MAC_SDK=$("$XCRUN" --sdk macosx --show-sdk-path)
+          clang -c -std=c11 -fvisibility=hidden -funwind-tables \
+            -DFFZ_HAVE_CRASH_HANDLER -target arm64-apple-ios12.0 -isysroot "$IOS_SDK" \
+            -Iinclude src/*.c ffi/*.c -o /dev/null && echo "iOS arm64 OK"
+          clang -c -std=c11 -fvisibility=hidden -funwind-tables \
+            -DFFZ_HAVE_CRASH_HANDLER -target arm64-apple-macos10.14 -isysroot "$MAC_SDK" \
+            -Iinclude src/*.c ffi/*.c -o /dev/null && echo "macOS arm64 OK"
+
+  dart-binding:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: analyze + format + end-to-end FFI smoke
+        run: |
+          cd clang
+          flutter pub get
+          dart analyze lib tool
+          dart format --output=none --set-exit-if-changed lib tool
+          cmake -S . -B build/cmake-rel -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/cmake-rel
+          SO=$(find build/cmake-rel -name 'libffz.so' | head -1)
+          echo "loading $SO"
+          dart run tool/ffi_smoke.dart "$SO"

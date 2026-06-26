@@ -19,7 +19,6 @@
 
 // --- size limits for the optimal DP (mirror matrix.rs) --------------------
 #define FFZ_MAX_MATRIX_SIZE (100 * 1024)  // cells; beyond this -> greedy fallback
-#define FFZ_MAX_HAYSTACK_LEN 2048
 #define FFZ_MAX_NEEDLE_LEN 2048
 
 // --- DP cells (explicit two-track scoring; see ffz_fuzzy.c) ---------------
@@ -66,6 +65,13 @@ static inline uint32_t ffz_at(ffz_str s, size_t i) {
 
 #include <string.h>
 #define FFZ_NF ((size_t)-1)
+
+// The SWAR/SIMD byte search (ffz_find_ci) and the all-ASCII scan assume a
+// little-endian target (byte i is the i-th least-significant). All supported
+// targets (x86, ARM, Android, iOS, Windows) are LE; fail loudly otherwise.
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#error "ffz requires a little-endian target."
+#endif
 
 // count-trailing-zeros, portable across GCC/Clang and MSVC. Inputs are nonzero
 // at every call site (guarded by a prior mask test).
@@ -167,6 +173,10 @@ bool ffz_prefilter(const ffz_config *cfg, ffz_str hay, ffz_str needle,
 
 // --- small helpers --------------------------------------------------------
 void ffz_indices_push(ffz_indices *ix, uint32_t v);
+// Decode one UTF-8 codepoint at s[*pos] (within [0,n)); advances *pos. Invalid/
+// truncated/overlong/surrogate -> U+FFFD. Shared by the haystack & pattern
+// decoders (single source of truth).
+uint32_t ffz_decode_cp(const uint8_t *s, size_t n, size_t *pos);
 static inline uint16_t ffz_sat_sub_u16(uint16_t a, uint16_t b) {
     return a > b ? (uint16_t)(a - b) : 0;
 }

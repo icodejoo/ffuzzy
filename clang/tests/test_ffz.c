@@ -34,6 +34,82 @@ static int32_t score(ffz_matcher *m, const char *q, const char *h,
     return s;
 }
 
+// score with explicit case/normalization (the default `score` uses smart/smart).
+static int32_t score_cfg(ffz_matcher *m, const char *q, const char *h,
+                         ffz_case_matching cm, ffz_normalization nm,
+                         ffz_mode mode) {
+    ffz_str_buf hb = {0};
+    ffz_str hs = ffz_str_from_utf8(h, strlen(h), &hb);
+    ffz_pattern *p = (mode == FFZ_FUZZY)
+                         ? ffz_pattern_parse(q, strlen(q), cm, nm)
+                         : ffz_pattern_new(q, strlen(q), cm, nm, mode);
+    int32_t s = ffz_pattern_match(m, p, hs, NULL);
+    ffz_pattern_free(p);
+    ffz_str_buf_free(&hb);
+    return s;
+}
+
+// Oversized input forces the greedy fallback (W*needle > FFZ_MAX_MATRIX_SIZE).
+static void test_greedy_fallback(ffz_matcher *m) {
+    char hay[601];
+    memset(hay, 'a', 600);
+    hay[600] = 0;
+    char ndl[201];
+    memset(ndl, 'a', 200);
+    ndl[200] = 0;  // 600*200 = 120000 cells > FFZ_MAX_MATRIX_SIZE (102400)
+    ffz_indices ix = {0};
+    int32_t s = score(m, ndl, hay, &ix, FFZ_FUZZY);
+    CHECK(s >= 0, "greedy: long needle matches long haystack");
+    CHECK(ix.len == 200, "greedy: all needle chars indexed");
+    int asc = 1;
+    for (size_t i = 1; i < ix.len; i++)
+        if (ix.data[i] <= ix.data[i - 1]) asc = 0;
+    CHECK(asc, "greedy: indices strictly ascending");
+    ffz_indices_free(&ix);
+}
+
+static void test_config_variants(ffz_matcher *m) {
+    CHECK(score_cfg(m, "rust", "RUST", FFZ_CASE_RESPECT, FFZ_NORM_SMART, FFZ_FUZZY) < 0,
+          "RESPECT: rust != RUST");
+    CHECK(score_cfg(m, "rust", "RUST", FFZ_CASE_IGNORE, FFZ_NORM_SMART, FFZ_FUZZY) >= 0,
+          "IGNORE: rust == RUST");
+    CHECK(score_cfg(m, "cafe", "caf\xC3\xA9", FFZ_CASE_SMART, FFZ_NORM_NEVER, FFZ_FUZZY) < 0,
+          "NORM_NEVER: cafe != café");
+    CHECK(score_cfg(m, "cafe", "caf\xC3\xA9", FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY) >= 0,
+          "NORM_SMART: cafe == café");
+    // match_paths config: '/' is a delimiter granting a boundary bonus.
+    ffz_matcher *mp = ffz_matcher_new(ffz_config_match_paths());
+    CHECK(score_cfg(mp, "b", "a/bc", FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_PREFIX) < 0,
+          "match_paths prefix sanity");
+    CHECK(score_cfg(mp, "bc", "a/bc", FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_SUBSTRING) >= 0,
+          "match_paths substring after delimiter");
+    ffz_matcher_free(mp);
+}
+
+static void test_corpus_clear_limit(void) {
+    ffz_corpus *c = ffz_corpus_new(ffz_config_default());
+    ffz_corpus_add(c, "alpha", 5);
+    ffz_corpus_add(c, "alto", 4);
+    ffz_corpus_add(c, "beta", 4);
+    ffz_results r = {0};
+    ffz_corpus_filter(c, "al", 2, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
+                      ffz_parallel_off(), 0, &r);  // limit 0 == all matches
+    CHECK(r.len == 2, "limit=0 returns all matches");
+    ffz_results_free(&r);
+    ffz_corpus_clear(c);
+    CHECK(ffz_corpus_len(c) == 0, "clear empties the corpus");
+    ffz_corpus_filter(c, "al", 2, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
+                      ffz_parallel_off(), 0, &r);
+    CHECK(r.len == 0, "filter on empty corpus -> 0");
+    ffz_results_free(&r);
+    ffz_corpus_add(c, "alien", 5);  // reuse after clear
+    ffz_corpus_filter(c, "al", 2, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
+                      ffz_parallel_off(), 0, &r);
+    CHECK(r.len == 1 && r.hits[0].item_index == 0, "reuse after clear works");
+    ffz_results_free(&r);
+    ffz_corpus_free(c);
+}
+
 // Reconstruct the matched substring (by codepoint indices) and compare, after
 // lowercasing both sides via ASCII (tests use ASCII reconstruction targets).
 static void test_basic(ffz_matcher *m) {
@@ -174,6 +250,31 @@ static size_t pinyin_hook(const char *item, size_t len, void *ctx,
     return 0;
 }
 
+static void test_add_keyed(void) {
+    // Explicit alternate keys (no hook): find 张三 by typing pinyin/initials.
+    ffz_corpus *c = ffz_corpus_new(ffz_config_default());
+    ffz_key keys[2];
+    keys[0].text = "zhangsan"; keys[0].len = 8; keys[0].kind = FFZ_KEY_PINYIN;
+    keys[1].text = "zs";       keys[1].len = 2; keys[1].kind = FFZ_KEY_INITIALS;
+    ffz_corpus_add_keyed(c, "\xE5\xBC\xA0\xE4\xB8\x89", 6, keys, 2);  // 张三
+    ffz_corpus_add_keyed(c, "plain", 5, NULL, 0);  // 0 extra keys is valid
+
+    ffz_results r = {0};
+    ffz_corpus_filter(c, "zhangsan", 8, FFZ_CASE_SMART, FFZ_NORM_SMART,
+                      FFZ_FUZZY, ffz_parallel_off(), 0, &r);
+    CHECK(r.len == 1 && r.hits[0].item_index == 0 &&
+              r.hits[0].matched_kind == FFZ_KEY_PINYIN,
+          "add_keyed: pinyin key matches 张三");
+    ffz_results_free(&r);
+
+    ffz_corpus_filter(c, "zs", 2, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
+                      ffz_parallel_off(), 0, &r);
+    CHECK(r.len >= 1 && r.hits[0].matched_kind == FFZ_KEY_INITIALS,
+          "add_keyed: initials key matches");
+    ffz_results_free(&r);
+    ffz_corpus_free(c);
+}
+
 static void test_corpus(void) {
     ffz_corpus *c = ffz_corpus_new(ffz_config_default());
     ffz_corpus_set_transliterator(c, pinyin_hook, NULL, 4);
@@ -257,6 +358,116 @@ static void test_parallel(void) {
     ffz_corpus_free(c);
 }
 
+// Property test: across several queries and limits, the parallel scan must
+// return EXACTLY the serial result (same items, scores, kinds, order), and
+// every reported index must be in-range and strictly increasing. Exercises the
+// per-thread top-K + arena paths over a >512-item corpus.
+static void test_property(void) {
+    ffz_corpus *c = ffz_corpus_new(ffz_config_default());
+    char buf[48];
+    for (int i = 0; i < 1500; i++) {
+        int n = snprintf(buf, sizeof(buf), "file_%d_widget_%d.dart", i, (i * 7) % 13);
+        ffz_corpus_add(c, buf, (size_t)n);
+    }
+    const char *queries[] = {"widget", "dart", "fwd", "file5", "z", ".dart"};
+    size_t limits[] = {0, 1, 10, 50, 1000};
+    int ok_det = 1, ok_idx = 1;
+    for (size_t qi = 0; qi < sizeof(queries) / sizeof(queries[0]); qi++) {
+        size_t ql = strlen(queries[qi]);
+        for (size_t li = 0; li < sizeof(limits) / sizeof(limits[0]); li++) {
+            ffz_results s = {0}, p = {0};
+            ffz_corpus_filter(c, queries[qi], ql, FFZ_CASE_SMART, FFZ_NORM_SMART,
+                              FFZ_FUZZY, ffz_parallel_off(), limits[li], &s);
+            ffz_corpus_filter(c, queries[qi], ql, FFZ_CASE_SMART, FFZ_NORM_SMART,
+                              FFZ_FUZZY, ffz_parallel_with(4), limits[li], &p);
+            if (s.len != p.len) ok_det = 0;
+            for (size_t i = 0; i < s.len && i < p.len; i++) {
+                if (s.hits[i].item_index != p.hits[i].item_index ||
+                    s.hits[i].score != p.hits[i].score ||
+                    s.hits[i].matched_kind != p.hits[i].matched_kind)
+                    ok_det = 0;
+                // indices strictly increasing (codepoint positions in the key)
+                ffz_indices *idx = &s.hits[i].indices;
+                for (size_t j = 1; j < idx->len; j++)
+                    if (idx->data[j] <= idx->data[j - 1]) ok_idx = 0;
+            }
+            ffz_results_free(&s);
+            ffz_results_free(&p);
+        }
+    }
+    CHECK(ok_det, "property: parallel == serial across queries/limits");
+    CHECK(ok_idx, "property: match indices strictly increasing");
+    ffz_corpus_free(c);
+}
+
+// Helper: are two result sets identical in length AND order (index+score)?
+static int results_identical(const ffz_results *a, const ffz_results *b) {
+    if (a->len != b->len) return 0;
+    for (size_t i = 0; i < a->len; i++)
+        if (a->hits[i].item_index != b->hits[i].item_index ||
+            a->hits[i].score != b->hits[i].score)
+            return 0;
+    return 1;
+}
+
+// Threshold boundary (511/512/513), massive score ties, and limit corners —
+// all must be deterministic: parallel == serial in set AND order.
+static void test_determinism_corners(void) {
+    // 1) Parallel threshold boundary: serial == parallel at 511/512/513 items.
+    int ok_bound = 1;
+    size_t sizes[] = {511, 512, 513};
+    for (size_t si = 0; si < 3; si++) {
+        ffz_corpus *c = ffz_corpus_new(ffz_config_default());
+        char buf[24];
+        for (size_t i = 0; i < sizes[si]; i++) {
+            int n = snprintf(buf, sizeof(buf), "node_%zu_db", i);
+            ffz_corpus_add(c, buf, (size_t)n);
+        }
+        ffz_results s = {0}, p = {0};
+        ffz_corpus_filter(c, "db", 2, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
+                          ffz_parallel_off(), 0, &s);
+        ffz_corpus_filter(c, "db", 2, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
+                          ffz_parallel_auto(), 0, &p);
+        if (!results_identical(&s, &p)) ok_bound = 0;
+        ffz_results_free(&s);
+        ffz_results_free(&p);
+        ffz_corpus_free(c);
+    }
+    CHECK(ok_bound, "determinism across the 511/512/513 thread boundary");
+
+    // 2) Massive score ties: 2000 identical items must order identically
+    //    (tie-break by item_index) under any thread count and limit.
+    ffz_corpus *c = ffz_corpus_new(ffz_config_default());
+    for (int i = 0; i < 2000; i++) ffz_corpus_add(c, "widget", 6);
+    ffz_corpus_add(c, "wonderful_widget", 16);
+    int ok_ties = 1, ok_corner = 1;
+    size_t limits[] = {0, 1, 5, 2000};
+    for (size_t li = 0; li < 4; li++) {
+        ffz_results s = {0}, p = {0};
+        ffz_corpus_filter(c, "widget", 6, FFZ_CASE_SMART, FFZ_NORM_SMART,
+                          FFZ_FUZZY, ffz_parallel_off(), limits[li], &s);
+        ffz_corpus_filter(c, "widget", 6, FFZ_CASE_SMART, FFZ_NORM_SMART,
+                          FFZ_FUZZY, ffz_parallel_with(8), limits[li], &p);
+        if (!results_identical(&s, &p)) ok_ties = 0;
+        ffz_results_free(&s);
+        ffz_results_free(&p);
+    }
+    CHECK(ok_ties, "determinism with 2000 tied scores across limits");
+
+    // 3) Limit corners on a parallel-eligible corpus.
+    ffz_results r = {0};
+    ffz_corpus_filter(c, "zzzz_nomatch", 12, FFZ_CASE_SMART, FFZ_NORM_SMART,
+                      FFZ_PREFIX, ffz_parallel_auto(), 0, &r);
+    if (r.len != 0) ok_corner = 0;  // no-match -> empty, no crash
+    ffz_results_free(&r);
+    ffz_corpus_filter(c, "widget", 6, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
+                      ffz_parallel_auto(), 999999, &r);  // limit >> matches
+    if (r.len != 2001) ok_corner = 0;  // all items match "widget"
+    ffz_results_free(&r);
+    CHECK(ok_corner, "limit corners: no-match empty, limit>>n returns all");
+    ffz_corpus_free(c);
+}
+
 int main(void) {
     ffz_matcher *m = ffz_matcher_new(ffz_config_default());
     test_basic(m);
@@ -266,9 +477,15 @@ int main(void) {
     test_unicode(m);
     test_modes(m);
     test_pattern_syntax(m);
+    test_greedy_fallback(m);
+    test_config_variants(m);
     ffz_matcher_free(m);
     test_corpus();
+    test_add_keyed();
     test_parallel();
+    test_property();
+    test_determinism_corners();
+    test_corpus_clear_limit();
 
     printf("\n%d/%d checks passed\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;

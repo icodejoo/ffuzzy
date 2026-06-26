@@ -60,6 +60,13 @@ void ffz_corpus_set_transliterator(ffz_corpus *c, ffz_transliterator fn,
 
 // Append items (UTF-8). The hook (if set) is invoked per item to build keys.
 void ffz_corpus_add(ffz_corpus *c, const char *item, size_t len);
+
+// Append an item with explicit alternate keys (UTF-8), bypassing the hook —
+// the host computes pinyin/romaji/initials itself and passes them here. The
+// ORIGINAL key is added automatically; `keys`/`nkeys` are the extras (copied).
+void ffz_corpus_add_keyed(ffz_corpus *c, const char *item, size_t len,
+                          const ffz_key *keys, size_t nkeys);
+
 size_t ffz_corpus_len(const ffz_corpus *c);
 void ffz_corpus_clear(ffz_corpus *c);
 

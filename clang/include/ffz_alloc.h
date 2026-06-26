@@ -17,6 +17,7 @@ void *ffz_dbg_calloc(size_t n, size_t sz);
 void *ffz_dbg_realloc(void *p, size_t n);
 void ffz_dbg_free(void *p);
 size_t ffz_alloc_live_blocks(void);  // currently-outstanding allocations
+void ffz_dbg_fail_after(int n);      // tests: fail every alloc after n (-1=off)
 
 #define malloc ffz_dbg_malloc
 #define calloc ffz_dbg_calloc

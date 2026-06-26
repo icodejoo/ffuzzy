@@ -26,32 +26,13 @@ struct ffz_pattern {
 typedef struct { uint32_t *d; size_t len, cap; } cpvec;
 static void cpvec_push(cpvec *v, uint32_t c) {
     if (v->len == v->cap) {
-        v->cap = v->cap ? v->cap * 2 : 16;
-        v->d = (uint32_t *)realloc(v->d, v->cap * sizeof(uint32_t));
+        size_t ncap = v->cap ? v->cap * 2 : 16;
+        uint32_t *d = (uint32_t *)realloc(v->d, ncap * sizeof(uint32_t));
+        if (!d) return;  // OOM: drop (needle truncated, never crashes)
+        v->d = d;
+        v->cap = ncap;
     }
     v->d[v->len++] = c;
-}
-
-// Decode one UTF-8 codepoint at *pi (within [0,n)); advances *pi. Invalid -> U+FFFD.
-static uint32_t next_cp(const uint8_t *s, size_t n, size_t *pi) {
-    size_t i = *pi;
-    uint8_t b0 = s[i];
-    uint32_t cp;
-    size_t need;
-    if (b0 < 0x80) { *pi = i + 1; return b0; }
-    else if ((b0 & 0xE0) == 0xC0) { cp = b0 & 0x1F; need = 1; }
-    else if ((b0 & 0xF0) == 0xE0) { cp = b0 & 0x0F; need = 2; }
-    else if ((b0 & 0xF8) == 0xF0) { cp = b0 & 0x07; need = 3; }
-    else { *pi = i + 1; return 0xFFFD; }
-    if (i + need >= n) { *pi = i + 1; return 0xFFFD; }
-    for (size_t k = 1; k <= need; k++) {
-        uint8_t bk = s[i + k];
-        if ((bk & 0xC0) != 0x80) { *pi = i + 1; return 0xFFFD; }
-        cp = (cp << 6) | (bk & 0x3F);
-    }
-    *pi = i + need + 1;
-    if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;
-    return cp;
 }
 
 // Build a normalized atom from a raw UTF-8 slice.
@@ -67,10 +48,16 @@ static void atom_build(ffz_atom *a, const char *raw, size_t n,
     size_t i = 0;
     bool saw_backslash = false;
     while (i < n) {
-        uint32_t c = next_cp(s, n, &i);
+        uint32_t c = ffz_decode_cp(s, n, &i);
         if (escape_ws) {
             if (saw_backslash) {
-                if (c == ' ') { v.d[v.len - 1] = ' '; saw_backslash = false; continue; }
+                // Replace the pushed backslash with the escaped space. Guard
+                // v.len: the backslash push may have been dropped on OOM.
+                if (c == ' ') {
+                    if (v.len > 0) v.d[v.len - 1] = ' ';
+                    saw_backslash = false;
+                    continue;
+                }
                 // not an escaped space: keep the backslash already pushed
             }
             saw_backslash = (c == '\\');
@@ -90,18 +77,24 @@ static void atom_build(ffz_atom *a, const char *raw, size_t n,
     if (append_dollar) cpvec_push(&v, '$');
 
     // Pack as ASCII bytes when possible (enables the matcher's SIMD path),
-    // else keep codepoints.
+    // else keep codepoints. Invariant on exit: needle_len > 0 => nb or nu is
+    // non-NULL (so the matcher never dereferences a NULL needle buffer).
     bool ascii = true;
     for (size_t i = 0; i < v.len; i++)
         if (v.d[i] >= 0x80) { ascii = false; break; }
     if (ascii) {
         a->nb = (uint8_t *)malloc(v.len ? v.len : 1);
-        for (size_t i = 0; i < v.len; i++) a->nb[i] = (uint8_t)v.d[i];
+        if (a->nb) {
+            for (size_t i = 0; i < v.len; i++) a->nb[i] = (uint8_t)v.d[i];
+        } else {
+            v.len = 0;  // OOM: degrade to an empty atom (dropped by emit_atom)
+        }
         a->nu = NULL;
         free(v.d);
     } else {
-        a->nu = v.d;
+        a->nu = v.d;       // valid for [0,v.len); NULL only if v.len == 0
         a->nb = NULL;
+        if (!a->nu) v.len = 0;
     }
     a->needle_len = v.len;
     a->kind = kind;
@@ -170,8 +163,11 @@ static void emit_atom(void *ud, const char *word, size_t wlen) {
     build_ctx *ctx = (build_ctx *)ud;
     ffz_pattern *p = ctx->p;
     if (p->n == ctx->cap) {
-        ctx->cap = ctx->cap ? ctx->cap * 2 : 4;
-        p->atoms = (ffz_atom *)realloc(p->atoms, ctx->cap * sizeof(ffz_atom));
+        size_t ncap = ctx->cap ? ctx->cap * 2 : 4;
+        ffz_atom *na = (ffz_atom *)realloc(p->atoms, ncap * sizeof(ffz_atom));
+        if (!na) return;  // OOM: drop this atom rather than deref NULL
+        p->atoms = na;
+        ctx->cap = ncap;
     }
     ffz_atom *a = &p->atoms[p->n];
     if (ctx->literal)
@@ -185,6 +181,7 @@ static void emit_atom(void *ud, const char *word, size_t wlen) {
 static ffz_pattern *build(const char *query, size_t n, ffz_case_matching cm,
                           ffz_normalization nm, bool literal, ffz_mode kind) {
     ffz_pattern *p = (ffz_pattern *)calloc(1, sizeof(*p));
+    if (!p) return NULL;  // OOM: callers treat NULL as "no pattern"
     build_ctx ctx = {p, 0, cm, nm, kind, literal};
     for_each_word(query, n, emit_atom, &ctx);
     return p;
@@ -212,7 +209,7 @@ void ffz_pattern_free(ffz_pattern *p) {
 
 int32_t ffz_pattern_match(ffz_matcher *m, const ffz_pattern *p,
                           ffz_str haystack, ffz_indices *out) {
-    if (p->n == 0) return 0;
+    if (!p || p->n == 0) return 0;
     int32_t total = 0;
     for (size_t i = 0; i < p->n; i++) {
         const ffz_atom *a = &p->atoms[i];

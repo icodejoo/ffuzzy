@@ -51,6 +51,18 @@ Machine: 32 logical CPUs, multi-thread = 16. N = 200,000.
 | 1,000,000 | 1 | 59.6 | 55.1 | 0.92x |
 | 1,000,000 | 16 | 4.88 | 4.96 | **1.02x** |
 
+## Methodology caveat
+
+These are single-run microbenchmarks (auto-timed ~0.4 s windows), so treat any
+cell within **±~10%** as **parity**, not a win. The robust, repeatable wins are
+the larger margins with a mechanistic cause: **`substring` everywhere
+(1.17–1.37×, SIMD scan)** and **all index-OFF cells (1.03–1.37×, SIMD all-ASCII
+detection on the per-query convert)**. The sub-1.10× cells (some `fuzzy`/`word`)
+are parity. For publishable numbers, run ≥7 reps and report min/median, randomize
+engine order (the harness currently runs C first → cold cache), and report
+per-query match counts. The real-device memory delta likewise sits inside RSS
+noise → "memory parity," not a measured win.
+
 ## Summary
 
 The gap is closed and broadly reversed — **C is faster than Rust in the large

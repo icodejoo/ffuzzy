@@ -7,7 +7,9 @@ with a transliteration hook** for pinyin / romaji / initials search.
 Two build modes:
 
 - **Exact (default)** — *byte-identical* to nucleo (verified: 6210/6210
-  query×haystack pairs, score + indices). **~25 KB** (`-Os`).
+  query×haystack pairs, score + indices, with `-DFFZ_NUCLEO_SUBSTRING_BUGCOMPAT`;
+  the shipped default deliberately fixes one nucleo non-ASCII substring
+  off-by-one — see Design notes). **~25 KB** (`-Os`).
 - **Compact** (`-DFFZ_COMPACT_CLASS`) — functional parity, slightly different
   scores for some non-ASCII text; drops the Unicode class table. **~20 KB**.
 
@@ -119,15 +121,19 @@ verifies its range compression is lossless before writing.
 | Full-width ↔ half-width, kana folding, NFC/NFD, pinyin | no | preprocessing / index-layer concern |
 
 **Pinyin / romaji / Korean initials** are **not** in the matcher. They are an
-index-layer feature: the host generates alternate search keys via the
-transliteration hook (the dictionary stays host-side), and the matcher just
-matches more strings. See `ffz_corpus.h`.
+index-layer feature: the host generates alternate search keys (the dictionary
+stays host-side) and the matcher just matches more strings. From **C** you can
+register a `ffz_transliterator` callback (`ffz_corpus.h`) invoked per item; from
+**Dart** the equivalent is `FfzCorpus.addKeyed(item, [FfzKey(...)])` — you
+compute the keys host-side and pass them in (the C function-pointer hook isn't
+bridged over FFI). A hit reports which key matched via `matchedKind`/`matchedKey`.
 
 ### Char classification: exact vs compact
 - **Exact (default)** ships `ffz_class_table.c`, a packed breakpoint table
   generated from nucleo's exact `char_class_non_ascii` via the same rustc, so
   classification — and therefore *every score* — is byte-identical to nucleo.
-- **Compact** (`-DFFZ_COMPACT_CLASS`) drops that ~12 KB table and approximates
+- **Compact** (`-DFFZ_COMPACT_CLASS`) drops that ~4.8 KB compressed table (~12 KB
+  uncompressed source) and approximates
   (UPPER iff it has a case fold; White_Space set; else LETTER). It only perturbs
   the camelCase/number *bonus* for some non-ASCII text; it never changes whether
   two codepoints compare equal, so **match/no-match is unaffected**.
@@ -164,10 +170,13 @@ ffz_corpus_filter(c, q, qlen, cm, nm, mode, ffz_parallel_with(8), limit, &r); //
 ```
 
 `{parallel:false, threads:0}` is the default (off). When on, `threads==0`
-auto-selects half the logical CPUs; a positive count is used verbatim (clamped
-to the item count). Corpora below 512 items always run serial. Results are
-**deterministic and identical** to the serial path regardless of thread count.
-From Dart, pass the bool + count straight through the FFI binding.
+auto-selects half the logical CPUs **capped at 8**; a positive count is used
+verbatim and **may exceed 8**, but a **global hard ceiling of (cpu-1)** is always
+enforced (leaves one core free) and the count is also clamped to the item count.
+Corpora below 512 items always run serial. Results are **deterministic and
+identical** to the serial path regardless of thread count. Each call (and each
+worker) uses its own matcher, so concurrent filters never race. From Dart, pass
+the bool + count straight through the FFI binding.
 
 ## Memory & leaks
 
@@ -176,3 +185,76 @@ C is manually managed; every `*_new`/`*_add`/filter has a matching
 counting allocator via macro interposition) and asserts the live-block count
 returns to baseline after every teardown — across matcher/pattern cycles and
 serial + parallel corpus lifecycles — so missing or late frees fail loudly.
+
+## Errors & crash debugging
+
+Two failure classes, handled differently:
+
+- **Recoverable errors are catchable in Dart.** Library-load/symbol failures and
+  out-of-memory in `filter` surface as `FfzException`; misuse (e.g. use after
+  `dispose`) throws `StateError`. The engine is hardened to *degrade, not crash*:
+  allocations drop-on-OOM, scratch is bounded, no recursion, invalid UTF-8 →
+  U+FFFD. Wrap calls in `try/catch` for an actionable Dart error.
+
+- **Hard native faults are NOT catchable** — but they are *localizable*. A
+  genuine memory fault (segfault/abort) terminates the process; `dart:ffi`
+  cannot turn a native signal into a Dart exception. The optional crash handler
+  (below) prints a backtrace before the process dies instead of failing
+  silently.
+
+### Automatic debug/release split (no manual flags)
+
+The native build is keyed off `CMAKE_BUILD_TYPE`, which Flutter sets per run mode
+— so localization fidelity follows the build automatically:
+
+| `flutter run` mode | build | `.so` (arm64) | crash handler | a native crash shows |
+|---|---|---|---|---|
+| debug | `-O1 -g`, **not stripped** | ~218 KB | compiled in | function + offset in-process (Windows: **`file:line`** via PDB) |
+| profile | `-O2 -g`, **not stripped** (optimized + locatable) | ~190 KB | compiled in | same as debug, at full speed |
+| release | `-Os`/`-Oz`, **stripped** + sidecar | **~32 KB** | omitted | OS tombstone + offline symbolize with the sidecar |
+
+(`build_android.sh` mirrors this: default = release; `FFZ_SELFDEBUG=1` = the
+locatable build. iOS/macOS use Xcode's per-config defaults + `.dSYM`.)
+
+### Crash handler (debug/profile by default)
+
+`FfzCrash.install()` registers a last-gasp handler (POSIX `sigaction` /
+Windows `SetUnhandledExceptionFilter`) that, on a fault, writes a backtrace to
+stderr (logcat on Android) and optionally a breadcrumb file, then re-raises so
+your OS crash reporter still fires. It never pretends to recover.
+
+```dart
+final report = FfzCrash.lastReport();          // previous run's crash, if any
+if (report != null) log('ffz last crash:\n$report');
+FfzCrash.install(breadcrumbPath: '${dir.path}/ffz_crash.log');
+```
+
+A verified debug (MSVC+PDB) crash prints the faulting line directly:
+
+```
+*** ffz native crash: exception 0xc0000005 at 0x7ff6...
+  #7  boom+0xa   (crash_harness.c:3)     <- exact faulting line
+  #8  main+0x41  (crash_harness.c:10)
+```
+
+The handler is **only compiled into debug/profile** builds: walking the stack
+in-process needs `.eh_frame` unwind tables across the whole library, which would
+inflate the stripped release `.so` from ~32 KB to ~58 KB. A plain release lib
+therefore omits it (`FfzCrash.install()` returns `false`) and you diagnose
+release crashes from the OS tombstone + the shipped `libffz.so.debug` /
+`.pdb` / `.dSYM` sidecar (`ndk-stack`/`addr2line`/Crashlytics-NDK). To force the
+in-process handler into release anyway, build with `-DFFZ_CRASH_IN_RELEASE=ON`
+(or `FFZ_CRASH_IN_RELEASE=1 scripts/build_android.sh`) — the ~58 KB path — and
+ship the sidecar.
+
+For local repro, the **ASan/UBSan** variant (the `sanitizers` CI job, or
+`-O1 -g -fsanitize=address,undefined`) pinpoints the faulting line; the
+differential test + CI fuzz/sanitizer runs keep the crash surface small.
+
+## Flutter plugin
+
+This directory **is** a Flutter FFI plugin (`pubspec.yaml` + `lib/ffz.dart` +
+`windows/`/`linux/`/`android/`/`ios/`/`macos/` native build). Depend on it with
+`ffz: { path: path/to/clang }`; the native library is built+bundled per platform
+from this `CMakeLists.txt`. It is **C-only** — no Rust dependency (`rust/` is
+retained solely for comparison). See `lib/ffz.dart` for the Dart API.

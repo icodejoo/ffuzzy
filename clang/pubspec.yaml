@@ -1,0 +1,41 @@
+name: ffz
+description: >-
+  Fast C fuzzy matcher (nucleo-compatible) for Flutter via FFI:
+  fuzzy/substring/prefix/postfix/exact matching with a resident corpus,
+  optional multi-threading, async filtering, and Unicode (CJK) support.
+version: 0.1.0
+repository: https://github.com/icodejoo/ffuzzy/tree/main/clang
+homepage: https://github.com/icodejoo/ffuzzy
+issue_tracker: https://github.com/icodejoo/ffuzzy/issues
+topics:
+  - fuzzy-search
+  - ffi
+  - matcher
+  - search
+  - unicode
+
+environment:
+  sdk: ^3.4.0
+  flutter: '>=3.10.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.0
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      ios:
+        ffiPlugin: true
+      linux:
+        ffiPlugin: true
+      macos:
+        ffiPlugin: true
+      windows:
+        ffiPlugin: true

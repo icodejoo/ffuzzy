@@ -198,10 +198,13 @@ int32_t ffz_fuzzy_optimal(ffz_matcher *m, ffz_str hay, ffz_str needle,
                 i = i - 1;  // needle[k-1] matched consecutively at i-1
             } else {
                 // gap entry consumed P[i-1]; descend that track to its origin.
+                // For any valid gap cell the chain bottoms out at pm[col]==1 with
+                // col>=1; the (col>0) guard prevents a size_t underflow if that
+                // invariant is ever broken.
                 size_t col = i - 1;
                 uint8_t *pm = &pmat[k * W];
                 while (col > 0 && !pm[col]) col--;
-                i = col - 1;  // P[col] came from M[k-1][col-1]
+                i = col > 0 ? col - 1 : 0;  // P[col] came from M[k-1][col-1]
             }
             k--;
             idx[k] = i;

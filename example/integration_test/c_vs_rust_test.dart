@@ -14,10 +14,6 @@ import 'package:ffz/ffz.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
-// The C library built by gcc (clang/libffz.dll). A bundled plugin would load
-// 'ffz.dll' from the app dir; here we point at the repo build directly.
-const _cLibPath = r'D:\workspaces\ffuzzy\clang\libffz.dll';
-
 // ── deterministic dataset (same shape as perf/gen_data.py) ───────────────────
 const _words = [
   'src','lib','core','util','config','model','view','controller','service',
@@ -59,8 +55,8 @@ void main() {
 
     final base = ProcessInfo.currentRss;
 
-    // C resident corpus (via the ffz Dart package).
-    final c = FfzCorpus(libraryPath: _cLibPath);
+    // C resident corpus via the bundled plugin native library (no path).
+    final c = FfzCorpus();
     c.addAll(items);
     final afterC = ProcessInfo.currentRss;
     final memC = afterC - base;

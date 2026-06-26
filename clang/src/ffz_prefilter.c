@@ -24,14 +24,15 @@ static bool prefilter_ascii(const ffz_config *cfg, const uint8_t *h, size_t hn,
         *end = ge;
         return true;
     }
-    // end = (last occurrence of last needle char in the tail) + 1
+    // end = (last occurrence of last needle char in the tail) + 1.
+    // Scan backward and stop at the first hit (= the last occurrence), instead
+    // of re-walking the whole tail forward. Same result; faster on long tails.
     uint8_t last = nd[nl - 1];
-    size_t e = ge, p = ge;
-    for (;;) {
-        size_t idx = ffz_find_ci(h + p, hn - p, last, ic);
-        if (idx == NF) break;
-        p += idx + 1;
-        e = p;
+    size_t e = ge;
+    for (size_t j = hn; j > ge; j--) {
+        uint8_t b = h[j - 1];
+        if (ic && b >= 'A' && b <= 'Z') b += 32;
+        if (b == last) { e = j; break; }
     }
     *end = e;
     return true;

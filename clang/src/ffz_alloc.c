@@ -10,19 +10,38 @@
 
 static atomic_size_t g_live = 0;
 
+// OOM fault injection for tests: after `g_fail_after` successful allocations,
+// every further allocation returns NULL (simulating sustained OOM), exercising
+// the library's drop-on-OOM paths. -1 disables (the default).
+static atomic_int g_fail_after = -1;
+
+void ffz_dbg_fail_after(int n) { atomic_store(&g_fail_after, n); }
+
+// Returns 1 and consumes a budget slot if this allocation should fail.
+static int fail_now(void) {
+    int c = atomic_load(&g_fail_after);
+    if (c < 0) return 0;            // injection disabled
+    if (c == 0) return 1;           // budget exhausted -> fail
+    atomic_fetch_sub(&g_fail_after, 1);
+    return 0;
+}
+
 void *ffz_dbg_malloc(size_t n) {
+    if (fail_now()) return NULL;
     void *p = malloc(n);
     if (p) atomic_fetch_add(&g_live, 1);
     return p;
 }
 
 void *ffz_dbg_calloc(size_t n, size_t sz) {
+    if (fail_now()) return NULL;
     void *p = calloc(n, sz);
     if (p) atomic_fetch_add(&g_live, 1);
     return p;
 }
 
 void *ffz_dbg_realloc(void *q, size_t n) {
+    if (fail_now()) return NULL;    // realloc failure leaves the old block valid
     void *p = realloc(q, n);
     // q==NULL behaves like malloc (new block); otherwise the block count is
     // unchanged (grown in place or moved). We never realloc to size 0.

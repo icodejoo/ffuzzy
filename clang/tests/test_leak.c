@@ -71,9 +71,62 @@ static void corpus_cycle(ffz_parallel par) {
     ffz_corpus_free(c);
 }
 
+// Arena stress: an oversized key (> one 64 KB block) + many small keys forces
+// multiple blocks and the dedicated-block splice; clear+reuse must fully free.
+static void arena_cycle(void) {
+    static char big[80000];
+    memset(big, 'a', sizeof(big));
+    ffz_corpus *c = ffz_corpus_new(ffz_config_default());
+    ffz_corpus_add(c, big, sizeof(big));  // oversized -> dedicated arena block
+    char buf[32];
+    for (int i = 0; i < 3000; i++) {      // many small -> multiple blocks
+        int n = snprintf(buf, sizeof(buf), "small_%d", i);
+        ffz_corpus_add(c, buf, (size_t)n);
+    }
+    ffz_results r = {0};
+    ffz_corpus_filter(c, "small", 5, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
+                      ffz_parallel_off(), 10, &r);
+    ffz_results_free(&r);
+    ffz_corpus_clear(c);          // arena_free all blocks
+    ffz_corpus_add(c, "reuse", 5);  // reuse after clear
+    ffz_corpus_free(c);
+}
+
+// Drive sustained OOM from allocation #`budget` onward: every add/filter must
+// degrade (drop-on-OOM) without crashing, and everything actually allocated
+// must still be freed (asserted by the caller via the live-block baseline).
+static void oom_cycle(int budget) {
+    ffz_dbg_fail_after(budget);
+    ffz_corpus *c = ffz_corpus_new(ffz_config_default());
+    if (c) {
+        char buf[40];
+        for (int i = 0; i < 800; i++) {
+            int n = snprintf(buf, sizeof(buf), "oom_widget_%d.dart", i);
+            ffz_corpus_add(c, buf, (size_t)n);  // many will be dropped on OOM
+        }
+        ffz_results r = {0};
+        ffz_corpus_filter(c, "widget", 6, FFZ_CASE_SMART, FFZ_NORM_SMART,
+                          FFZ_FUZZY, ffz_parallel_off(), 25, &r);
+        ffz_results_free(&r);
+        ffz_corpus_filter(c, "dart", 4, FFZ_CASE_SMART, FFZ_NORM_SMART,
+                          FFZ_FUZZY, ffz_parallel_auto(), 0, &r);
+        ffz_results_free(&r);
+        ffz_corpus_free(c);  // frees succeed (no allocation) even under injection
+    }
+    ffz_dbg_fail_after(-1);  // disable before returning
+}
+
 int main(void) {
     size_t base = ffz_alloc_live_blocks();
     CHECK(base == 0, "baseline live blocks == 0");
+
+    // Arena over-block / multi-block / clear-reuse: no leak across cycles.
+    for (int i = 0; i < 30; i++) arena_cycle();
+    CHECK(ffz_alloc_live_blocks() == base, "no leak after arena stress cycles");
+
+    // OOM injection across a spread of budgets: never crash, never leak.
+    for (int budget = 1; budget <= 60; budget++) oom_cycle(budget);
+    CHECK(ffz_alloc_live_blocks() == base, "no leak across OOM-injected cycles");
 
     // Many matcher/pattern cycles: live must return to baseline every time.
     for (int i = 0; i < 2000; i++) matcher_cycle();

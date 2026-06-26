@@ -33,7 +33,7 @@ dependencies:
   ffi: ^2.1.0
   # The C-engine Dart binding (clang/), compared against the Rust engine.
   ffz:
-    path: ../clang/dart
+    path: ../clang
 
 dev_dependencies:
   integration_test:

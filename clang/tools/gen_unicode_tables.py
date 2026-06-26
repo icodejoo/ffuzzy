@@ -98,22 +98,6 @@ def compress(pairs):
     return runs, pairs
 
 
-def emit_runs(name, runs):
-    out = [f"const ffz_fold_run {name}[] = {{"]
-    line = "    "
-    for (s, e, o) in runs:
-        cell = "{0x%X,0x%X,%d}, " % (s, e, o)
-        if len(line) + len(cell) > 96:
-            out.append(line.rstrip())
-            line = "    "
-        line += cell
-    if line.strip():
-        out.append(line.rstrip())
-    out.append("};")
-    out.append(f"const size_t {name}_len = sizeof({name})/sizeof({name}[0]);")
-    return "\n".join(out)
-
-
 def emit_casefold(runs):
     """runs: (start,end,offset). Dict-pack: unique offsets -> u8 index, span u8.
     Emits start[] (u32), span[] (u8, =end-start), offidx[] (u8), off[] (i32)."""

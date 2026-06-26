@@ -57,7 +57,9 @@ ffz_config ffz_config_match_paths(void) {
 void ffz_indices_push(ffz_indices *ix, uint32_t v) {
     if (ix->len == ix->cap) {
         size_t ncap = ix->cap ? ix->cap * 2 : 16;
-        ix->data = (uint32_t *)realloc(ix->data, ncap * sizeof(uint32_t));
+        uint32_t *d = (uint32_t *)realloc(ix->data, ncap * sizeof(uint32_t));
+        if (!d) return;  // OOM: drop rather than deref NULL (no overflow check
+        ix->data = d;    // needed: ncap is bounded by needle_len <= 2048)
         ix->cap = ncap;
     }
     ix->data[ix->len++] = v;
@@ -89,7 +91,9 @@ void ffz_indices_sort_dedup(ffz_indices *ix) {
 static void buf_push(ffz_str_buf *buf, uint32_t cp) {
     if (buf->len == buf->cap) {
         size_t ncap = buf->cap ? buf->cap * 2 : 32;
-        buf->cp = (uint32_t *)realloc(buf->cp, ncap * sizeof(uint32_t));
+        uint32_t *d = (uint32_t *)realloc(buf->cp, ncap * sizeof(uint32_t));
+        if (!d) return;  // OOM: drop the codepoint rather than deref NULL
+        buf->cp = d;
         buf->cap = ncap;
     }
     buf->cp[buf->len++] = cp;
@@ -110,6 +114,28 @@ static size_t first_non_ascii(const uint8_t *p, size_t n) {
     return n;
 }
 
+// Decode one UTF-8 codepoint (shared by the haystack and pattern decoders).
+uint32_t ffz_decode_cp(const uint8_t *s, size_t n, size_t *pos) {
+    size_t i = *pos;
+    uint8_t b0 = s[i];
+    uint32_t cp;
+    size_t need;
+    if (b0 < 0x80) { *pos = i + 1; return b0; }
+    else if ((b0 & 0xE0) == 0xC0) { cp = b0 & 0x1F; need = 1; }
+    else if ((b0 & 0xF0) == 0xE0) { cp = b0 & 0x0F; need = 2; }
+    else if ((b0 & 0xF8) == 0xF0) { cp = b0 & 0x07; need = 3; }
+    else { *pos = i + 1; return 0xFFFD; }
+    if (i + need >= n) { *pos = i + 1; return 0xFFFD; }  // truncated
+    for (size_t k = 1; k <= need; k++) {
+        uint8_t bk = s[i + k];
+        if ((bk & 0xC0) != 0x80) { *pos = i + 1; return 0xFFFD; }
+        cp = (cp << 6) | (bk & 0x3F);
+    }
+    *pos = i + need + 1;
+    if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;  // overlong/surrogate
+    return cp;
+}
+
 ffz_str ffz_str_from_utf8(const char *s, size_t n, ffz_str_buf *buf) {
     const uint8_t *p = (const uint8_t *)s;
     // Fast path: all-ASCII text is used as-is (the bytes ARE the codepoints),
@@ -118,40 +144,9 @@ ffz_str ffz_str_from_utf8(const char *s, size_t n, ffz_str_buf *buf) {
         ffz_str out = {p, NULL, n};
         return out;
     }
-    size_t i;
-    // Otherwise decode the whole thing to codepoints.
     buf->len = 0;
-    i = 0;
-    while (i < n) {
-        uint8_t b0 = p[i];
-        uint32_t cp;
-        size_t need;
-        if (b0 < 0x80) {
-            cp = b0; need = 0;
-        } else if ((b0 & 0xE0) == 0xC0) {
-            cp = b0 & 0x1F; need = 1;
-        } else if ((b0 & 0xF0) == 0xE0) {
-            cp = b0 & 0x0F; need = 2;
-        } else if ((b0 & 0xF8) == 0xF0) {
-            cp = b0 & 0x07; need = 3;
-        } else {
-            buf_push(buf, 0xFFFD); i++; continue;
-        }
-        if (i + need >= n) {  // not enough continuation bytes (truncated)
-            buf_push(buf, 0xFFFD); i++; continue;
-        }
-        bool ok = true;
-        for (size_t k = 1; k <= need; k++) {
-            uint8_t bk = p[i + k];
-            if ((bk & 0xC0) != 0x80) { ok = false; break; }
-            cp = (cp << 6) | (bk & 0x3F);
-        }
-        if (!ok) { buf_push(buf, 0xFFFD); i++; continue; }
-        // reject overlong / out-of-range / surrogates -> replacement
-        if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;
-        buf_push(buf, cp);
-        i += need + 1;
-    }
+    size_t i = 0;
+    while (i < n) buf_push(buf, ffz_decode_cp(p, n, &i));
     ffz_str out = {NULL, buf->cp, buf->len};
     return out;
 }

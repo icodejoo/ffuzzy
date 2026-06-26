@@ -27,21 +27,33 @@ ffz_config *ffz_matcher_config(ffz_matcher *m) { return &m->cfg; }
 bool ffz_matcher_reserve(ffz_matcher *m, size_t width, size_t needle_len) {
     if (width > m->cap_hay) {
         size_t nc = m->cap_hay ? m->cap_hay : 64;
-        while (nc < width) nc *= 2;
+        while (nc < width) {
+            if (nc > (SIZE_MAX >> 1)) return false;  // doubling overflow guard
+            nc *= 2;
+        }
+        // Assign on success before the next realloc so a partial failure never
+        // leaves a dangling (moved-and-freed) pointer in the struct.
         uint32_t *h = (uint32_t *)realloc(m->hay, nc * sizeof(uint32_t));
+        if (!h) return false;
+        m->hay = h;
         uint8_t *b = (uint8_t *)realloc(m->bonus, nc);
-        if (!h || !b) return false;
-        m->hay = h; m->bonus = b;
+        if (!b) return false;
+        m->bonus = b;
         m->cap_hay = nc;
     }
-    size_t need = width * needle_len;
+    size_t need = width * needle_len;  // bounded < FFZ_MAX_MATRIX_SIZE by caller
     if (need > m->cap_grid) {
         size_t nc = m->cap_grid ? m->cap_grid : 256;
-        while (nc < need) nc *= 2;
+        while (nc < need) {
+            if (nc > (SIZE_MAX >> 1)) return false;
+            nc *= 2;
+        }
         ffz_mcell *g = (ffz_mcell *)realloc(m->mgrid, nc * sizeof(ffz_mcell));
+        if (!g) return false;
+        m->mgrid = g;
         uint8_t *pm = (uint8_t *)realloc(m->pmat, nc);
-        if (!g || !pm) return false;
-        m->mgrid = g; m->pmat = pm;
+        if (!pm) return false;
+        m->pmat = pm;
         m->cap_grid = nc;
     }
     return true;
