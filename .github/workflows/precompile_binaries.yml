@@ -197,7 +197,9 @@ jobs:
         env:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUSTFLAGS: "-Zunstable-options -Cpanic=immediate-abort"
+          # 用 target-specific 变量而非 RUSTFLAGS，避免污染 cargo install cargo-zigbuild
+          # (cargo install 编译宿主工具时宿主 core 是 unwind 策略，immediate-abort 会冲突)
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-Zunstable-options -Cpanic=immediate-abort"
         run: >
           dart run build_tool precompile-binaries -v
           --manifest-dir=../../ffuzzy_lite_manifest
