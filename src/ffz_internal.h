@@ -102,6 +102,32 @@ static inline unsigned ffz_ctz64(uint64_t x) {
 #define ffz_ctz64(x) ((unsigned)__builtin_ctzll(x))
 #endif
 
+// count-leading-zeros (mirror of ctz, used for reverse SIMD byte search).
+#if defined(_MSC_VER)
+static inline unsigned ffz_clz32(uint32_t x) {
+    unsigned long i;
+    _BitScanReverse(&i, (unsigned long)x);
+    return 31u - (unsigned)i;
+}
+static inline unsigned ffz_clz64(uint64_t x) {
+    unsigned long i;
+#if defined(_M_X64) || defined(_M_ARM64)
+    _BitScanReverse64(&i, x);
+    return 63u - (unsigned)i;
+#else
+    if ((uint32_t)(x >> 32)) {
+        _BitScanReverse(&i, (unsigned long)(x >> 32));
+        return 31u - (unsigned)i;
+    }
+    _BitScanReverse(&i, (unsigned long)x);
+    return 63u - (unsigned)i;
+#endif
+}
+#else
+#define ffz_clz32(x) ((unsigned)__builtin_clz(x))
+#define ffz_clz64(x) ((unsigned)__builtin_clzll(x))
+#endif
+
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
 #include <emmintrin.h>
 #define FFZ_SSE2 1
@@ -153,6 +179,68 @@ static inline size_t ffz_find_ci(const uint8_t *h, size_t n, uint8_t c, bool ic)
     }
     const uint8_t *p = (const uint8_t *)memchr(h, c, n);
     return p ? (size_t)(p - h) : FFZ_NF;
+}
+
+// Last index of byte c in h[0..n), case-insensitive when ic is true and c is
+// a lowercase ASCII letter (also matches c-32). Returns FFZ_NF if not found.
+// Runs 16 bytes/iter on SSE2/NEON; falls back to scalar otherwise.
+static inline size_t ffz_rfind_ci(const uint8_t *h, size_t n, uint8_t c, bool ic) {
+    if (ic && c >= 'a' && c <= 'z') {
+        uint8_t c2 = (uint8_t)(c - 32);
+        size_t i = n;
+#if defined(FFZ_SSE2)
+        __m128i v1 = _mm_set1_epi8((char)c), v2 = _mm_set1_epi8((char)c2);
+        while (i >= 16) {
+            i -= 16;
+            __m128i x = _mm_loadu_si128((const __m128i *)(h + i));
+            __m128i m = _mm_or_si128(_mm_cmpeq_epi8(x, v1), _mm_cmpeq_epi8(x, v2));
+            unsigned mask = (unsigned)_mm_movemask_epi8(m);
+            if (mask) return i + (size_t)(31u - ffz_clz32(mask));
+        }
+#elif defined(FFZ_NEON)
+        uint8x16_t v1 = vdupq_n_u8(c), v2 = vdupq_n_u8(c2);
+        while (i >= 16) {
+            i -= 16;
+            uint8x16_t x = vld1q_u8(h + i);
+            uint8x16_t m = vorrq_u8(vceqq_u8(x, v1), vceqq_u8(x, v2));
+            // ARM LE: lane 0 = bytes 0-7 (byte 0 at LSB), lane 1 = bytes 8-15
+            uint64_t lo = vgetq_lane_u64(vreinterpretq_u64_u8(m), 0);
+            uint64_t hi = vgetq_lane_u64(vreinterpretq_u64_u8(m), 1);
+            if (hi) return i + 8u + (size_t)(7u - (ffz_clz64(hi) >> 3));
+            if (lo) return i + (size_t)(7u - (ffz_clz64(lo) >> 3));
+        }
+#endif
+        while (i > 0) {
+            uint8_t b = h[--i];
+            if (b == c || b == c2) return i;
+        }
+    } else {
+        size_t i = n;
+#if defined(FFZ_SSE2)
+        __m128i v1 = _mm_set1_epi8((char)c);
+        while (i >= 16) {
+            i -= 16;
+            __m128i x = _mm_loadu_si128((const __m128i *)(h + i));
+            unsigned mask = (unsigned)_mm_movemask_epi8(_mm_cmpeq_epi8(x, v1));
+            if (mask) return i + (size_t)(31u - ffz_clz32(mask));
+        }
+#elif defined(FFZ_NEON)
+        uint8x16_t v1 = vdupq_n_u8(c);
+        while (i >= 16) {
+            i -= 16;
+            uint8x16_t x = vld1q_u8(h + i);
+            uint8x16_t m = vceqq_u8(x, v1);
+            uint64_t lo = vgetq_lane_u64(vreinterpretq_u64_u8(m), 0);
+            uint64_t hi = vgetq_lane_u64(vreinterpretq_u64_u8(m), 1);
+            if (hi) return i + 8u + (size_t)(7u - (ffz_clz64(hi) >> 3));
+            if (lo) return i + (size_t)(7u - (ffz_clz64(lo) >> 3));
+        }
+#endif
+        while (i > 0) {
+            if (h[--i] == c) return i;
+        }
+    }
+    return FFZ_NF;
 }
 
 // --- scoring (ffz_score.c) ------------------------------------------------

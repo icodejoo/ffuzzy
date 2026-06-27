@@ -25,16 +25,11 @@ static bool prefilter_ascii(const ffz_config *cfg, const uint8_t *h, size_t hn,
         return true;
     }
     // end = (last occurrence of last needle char in the tail) + 1.
-    // Scan backward and stop at the first hit (= the last occurrence), instead
-    // of re-walking the whole tail forward. Same result; faster on long tails.
+    // SIMD reverse scan: 16 bytes/iter on SSE2/NEON.
     uint8_t last = nd[nl - 1];
-    size_t e = ge;
-    for (size_t j = hn; j > ge; j--) {
-        uint8_t b = h[j - 1];
-        if (ic && b >= 'A' && b <= 'Z') b += 32;
-        if (b == last) { e = j; break; }
-    }
-    *end = e;
+    size_t tail = hn - ge;
+    size_t ri = ffz_rfind_ci(h + ge, tail, last, ic);
+    *end = (ri != NF) ? ge + ri + 1 : ge;
     return true;
 }
 
