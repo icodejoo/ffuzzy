@@ -38,13 +38,13 @@ jobs:
         shell: cmd
         run: |
           cd clang
-          cl /nologo /W3 /O2 /Iinclude src/*.c tests/test_ffz.c /Fe:tc.exe
+          cl /nologo /std:c11 /W3 /O2 /Iinclude src/*.c tests/test_ffz.c /Fe:tc.exe
           tc.exe
       - name: leak test (MSVC) — covers the Win32 CreateThread path
         shell: cmd
         run: |
           cd clang
-          cl /nologo /W3 /O2 /DFFZ_TRACK_ALLOC /Iinclude src/*.c tests/test_leak.c /Fe:tl.exe
+          cl /nologo /std:c11 /W3 /O2 /DFFZ_TRACK_ALLOC /Iinclude src/*.c tests/test_leak.c /Fe:tl.exe
           tl.exe
 
   sanitizers:
@@ -103,7 +103,7 @@ jobs:
         shell: bash
         run: |
           cd clang
-          cc -g -O0 -funwind-tables -fno-omit-frame-pointer -Iinclude \
+          cc -g -O0 -funwind-tables -fno-omit-frame-pointer -rdynamic -Iinclude \
             tools/crash_smoke.c ffi/ffz_crash.c -ldl -o crash_smoke
           ./crash_smoke crash.log > /dev/null 2> err.txt || true
           echo "--- stderr ---"; cat err.txt
@@ -177,12 +177,12 @@ jobs:
           XCRUN=$(command -v xcrun)
           IOS_SDK=$("$XCRUN" --sdk iphoneos --show-sdk-path)
           MAC_SDK=$("$XCRUN" --sdk macosx --show-sdk-path)
-          clang -c -std=c11 -fvisibility=hidden -funwind-tables \
+          clang -fsyntax-only -std=c11 -fvisibility=hidden -funwind-tables \
             -DFFZ_HAVE_CRASH_HANDLER -target arm64-apple-ios12.0 -isysroot "$IOS_SDK" \
-            -Iinclude src/*.c ffi/*.c -o /dev/null && echo "iOS arm64 OK"
-          clang -c -std=c11 -fvisibility=hidden -funwind-tables \
+            -Iinclude src/*.c ffi/*.c && echo "iOS arm64 OK"
+          clang -fsyntax-only -std=c11 -fvisibility=hidden -funwind-tables \
             -DFFZ_HAVE_CRASH_HANDLER -target arm64-apple-macos10.14 -isysroot "$MAC_SDK" \
-            -Iinclude src/*.c ffi/*.c -o /dev/null && echo "macOS arm64 OK"
+            -Iinclude src/*.c ffi/*.c && echo "macOS arm64 OK"
 
   dart-binding:
     runs-on: ubuntu-latest

@@ -7,6 +7,13 @@
 // dladdr (POSIX) / dbghelp (Windows); line numbers come from the build's
 // debug info (PDB on Windows; addr2line/atos against the unstripped lib or
 // sidecar elsewhere).
+
+// dladdr()/Dl_info are GNU extensions; on glibc they are only declared when
+// _GNU_SOURCE is set. Must precede every system header (harmless elsewhere).
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
+
 #include "ffz_crash.h"
 
 #include <stddef.h>
@@ -130,6 +137,7 @@ int ffz_install_crash_handler(const char *breadcrumb_path) {
 #include <signal.h>
 #include <unistd.h>
 #include <dlfcn.h>
+#include <ucontext.h>
 
 #if defined(__ANDROID__)
 #include <unwind.h>
@@ -189,6 +197,40 @@ static int capture(void **frames, int cap) {
 static int capture(void **frames, int cap) { return backtrace(frames, cap); }
 #endif
 
+// Best-effort PC of the faulting instruction, read from the signal ucontext.
+// backtrace()/_Unwind_Backtrace run on the *handler's* stack and may omit the
+// interrupted frame — notably on macOS, where the trace stops at the sigtramp
+// and the crashing function never appears. Seeding the report with this PC as
+// frame #0 makes the actual crash site show up on every platform. Returns NULL
+// for arch/OS combos we don't decode (the trace alone is then used).
+static void *fault_pc(void *uc) {
+    if (!uc) return 0;
+    ucontext_t *u = (ucontext_t *)uc;
+#if defined(__APPLE__)
+  #if defined(__aarch64__) || defined(__arm64__)
+    return (void *)(uintptr_t)u->uc_mcontext->__ss.__pc;
+  #elif defined(__x86_64__)
+    return (void *)(uintptr_t)u->uc_mcontext->__ss.__rip;
+  #else
+    (void)u; return 0;
+  #endif
+#elif defined(__linux__)  // also covers Android (bionic shares the layout)
+  #if defined(__x86_64__)
+    return (void *)(uintptr_t)u->uc_mcontext.gregs[REG_RIP];
+  #elif defined(__i386__)
+    return (void *)(uintptr_t)u->uc_mcontext.gregs[REG_EIP];
+  #elif defined(__aarch64__)
+    return (void *)(uintptr_t)u->uc_mcontext.pc;
+  #elif defined(__arm__)
+    return (void *)(uintptr_t)u->uc_mcontext.arm_pc;
+  #else
+    (void)u; return 0;
+  #endif
+#else
+    (void)u; return 0;
+#endif
+}
+
 static const char *signame(int sig) {
     switch (sig) {
         case SIGSEGV: return "SIGSEGV (invalid memory access)";
@@ -203,7 +245,6 @@ static const char *signame(int sig) {
 static volatile sig_atomic_t g_in_handler = 0;
 
 static void ffz_posix_handler(int sig, siginfo_t *info, void *uc) {
-    (void)uc;
     // Re-entrancy guard: a fault *inside* the handler (e.g. dladdr/backtrace
     // touching a corrupt heap) must go straight to the default action, not loop.
     if (g_in_handler) { signal(sig, SIG_DFL); raise(sig); return; }
@@ -215,7 +256,12 @@ static void ffz_posix_handler(int sig, siginfo_t *info, void *uc) {
     rep_str(&r, "\n");
 
     void *frames[64];
-    int n = capture(frames, 64);
+    int n = 0;
+    // Seed frame #0 with the faulting PC so the crash site is always present,
+    // even when the unwinder can't cross the signal trampoline (macOS).
+    void *pc = fault_pc(uc);
+    if (pc) frames[n++] = pc;
+    n += capture(frames + n, 64 - n);
     for (int i = 0; i < n; i++) {
         rep_str(&r, "  #"); rep_dec(&r, i); rep_str(&r, "  ");
         rep_frame(&r, frames[i]);

@@ -9,7 +9,10 @@
 #include "ffz_crash.h"
 #include <stdio.h>
 
-static int boom(volatile int *p) { return *p; }
+// External linkage on purpose: with -rdynamic this lands in .dynsym so dladdr()
+// can name it on Linux (where local symbols are invisible to dladdr). CI greps
+// the backtrace for "boom" to prove the crash site is symbolized.
+int boom(volatile int *p) { return *p; }
 
 int main(int argc, char **argv) {
     ffz_install_crash_handler(argc > 1 ? argv[1] : 0);
