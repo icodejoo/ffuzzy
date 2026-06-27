@@ -6,11 +6,21 @@
 package). The original Rust + `flutter_rust_bridge` implementation is deprecated
 and retained only for performance comparison under `benchmark/`.
 
-- **Breaking — engine and API replaced.** The Rust-era API (`FuzzyMatcher`,
-  `FuzzyStringMatcher`, `fuzzyMatch`, …) is gone. Use the C-engine API:
-  `FuzzyCorpus` + `filter`/`filterAsync`, `FuzzyHit`, `FuzzyMode`/`FuzzyCase`/`FuzzyNorm`,
-  `FuzzyKey`/`addKeyed`, `fuzzyCodepointToUtf16`, `FuzzyException`, `FuzzyCrash`. See the
-  README for the full surface.
+- **Breaking — engine and API replaced.** The Rust-era API (the old
+  `FuzzyMatcher`, `FuzzyStringMatcher`, `fuzzyMatch`, …) is gone. Use the
+  C-engine API:
+  - `FuzzyCorpus<T>` — generic object search via a `stringOf` extractor (or
+    `FuzzyCorpus.strings(...)` for plain strings); hits carry the object as
+    `FuzzyHit<T>.obj`.
+  - **Match modes are methods**, not a flag: `fuzzy` / `substring` / `prefix` /
+    `postfix` / `exact`, each with an `…Async` twin (background isolate).
+  - **`FuzzyOptions`** bundles `caseMatching`/`normalization`/`parallel`/
+    `threads`/`limit`/`highlight` as corpus-wide defaults (constructor),
+    overridable field-by-field via each method's named params.
+  - Mutation: `add`/`addAll`/`addKeyed`/`update`/`removeAt`/`removeWhere`/
+    `refresh`/`clear` (append-only native corpus → edits rebuild in O(n)).
+  - Plus `FuzzyHit`, `FuzzyKey`/`FuzzyKeyKind`, `fuzzyCodepointToUtf16`,
+    `FuzzyException`, `FuzzyCrash`. See the README for the full surface.
 - **No Rust toolchain required.** Native code is plain C, compiled and bundled
   per platform by the standard SDK; the previous precompiled-binary download
   step is gone.

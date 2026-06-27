@@ -6,30 +6,30 @@ import 'package:ffuzzy/ffuzzy.dart';
 
 Future<void> main(List<String> args) async {
   final libPath = args.isNotEmpty ? args[0] : null;
-  final c = FuzzyCorpus(libraryPath: libPath);
+  final c = FuzzyCorpus.strings(const [], libraryPath: libPath);
 
   c.addAll(['src/main.rs', 'lib/ffz.dart', '中文搜索引擎', 'README.md', 'café']);
   if (c.length != 5) throw 'length ${c.length} != 5';
 
-  final fuzzy = c.filter('src', limit: 10);
+  final fuzzy = c.fuzzy('src', limit: 10);
   if (fuzzy.isEmpty) throw 'expected fuzzy hits for "src"';
+  if (fuzzy.first.obj.isEmpty) throw 'hit.obj should be the original item text';
 
-  final cjk = c.filter('中文');
+  final cjk = c.fuzzy('中文');
   if (cjk.isEmpty) throw 'expected a CJK hit for "中文"';
 
-  final fold = c.filter('cafe'); // diacritic fold café≈cafe
+  final fold = c.fuzzy('cafe'); // diacritic fold café≈cafe
   if (fold.isEmpty) throw 'expected diacritic-folded hit for "cafe"';
 
-  final pref =
-      c.filter('READ', mode: FuzzyMode.prefix, caseMatching: FuzzyCase.ignore);
+  final pref = c.prefix('READ', caseMatching: FuzzyCase.ignore);
   if (pref.isEmpty) throw 'expected prefix hit for "READ"';
 
   // Highlight conversion must yield in-range UTF-16 offsets.
   final h = fuzzy.first;
   fuzzyCodepointToUtf16('src/main.rs', h.indices);
 
-  // filterAsync must agree with the synchronous filter, element-by-element.
-  final async = await c.filterAsync('src', limit: 10);
+  // The async twin must agree with the synchronous method, element-by-element.
+  final async = await c.fuzzyAsync('src', limit: 10);
   if (async.length != fuzzy.length) {
     throw 'filterAsync len ${async.length} != ${fuzzy.length}';
   }
@@ -44,10 +44,17 @@ Future<void> main(List<String> args) async {
     FuzzyKey.kind('zhangsan', FuzzyKeyKind.pinyin),
     FuzzyKey.kind('zs', FuzzyKeyKind.initials),
   ]);
-  final py = c.filter('zhangsan');
+  final py = c.fuzzy('zhangsan');
   if (py.isEmpty || py.first.matchedKind != FuzzyKeyKind.pinyin) {
     throw 'addKeyed pinyin key did not match';
   }
+
+  // Mutation (rebuild path): removeWhere drops items; survivors still match.
+  final before = c.length;
+  c.removeWhere((s) => s == 'README.md');
+  if (c.length != before - 1) throw 'removeWhere did not drop one item';
+  if (c.fuzzy('README').isNotEmpty) throw 'removed item should not match';
+  if (c.fuzzy('src').isEmpty) throw 'survivor should still match after rebuild';
 
   // FuzzyCrash API: install never throws; lastReport on a fresh path is null.
   FuzzyCrash.install();

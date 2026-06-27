@@ -1,20 +1,26 @@
 /// ffuzzy — idiomatic Dart binding for the compact C fuzzy matcher, via dart:ffi.
 ///
 /// ```dart
-/// final corpus = FuzzyCorpus();                  // or matchPaths/preferPrefix
-/// corpus.addAll(['src/main.rs', 'lib/ffz.dart', '中文搜索']);
-/// final hits = corpus.filter('src', parallel: true, limit: 50);
-/// for (final h in hits) {
-///   final u16 = fuzzyCodepointToUtf16('src/main.rs', h.indices); // for TextSpan
-///   print('${h.index}  score=${h.score}  kind=${h.matchedKind}  $u16');
+/// // Search a list of objects; results carry the original object via .obj.
+/// final corpus = FuzzyCorpus<File>(files, stringOf: (f) => f.path);
+/// for (final h in corpus.fuzzy('src', limit: 50)) {
+///   final u16 = fuzzyCodepointToUtf16(h.obj.path, h.indices); // for TextSpan
+///   print('${h.obj.path}  score=${h.score}  $u16');
 /// }
-/// corpus.dispose();                             // or rely on the NativeFinalizer
+/// corpus.dispose();                          // or rely on the NativeFinalizer
+///
+/// // Plain strings:
+/// final c = FuzzyCorpus.strings(['a/b.dart', '中文搜索']);
+/// c.substring('中文');                        // mode = a method, not a flag
 /// ```
 ///
+/// Default search options are set once on the constructor ([FuzzyOptions]) and
+/// overridden per call field-by-field via the mode methods' named params.
+///
 /// NOTE: every call is synchronous and runs on the calling isolate; for a large
-/// corpus, create and use the `FuzzyCorpus` on a background isolate so `filter`
-/// does not jank the UI. An `FuzzyCorpus` must only be used on the isolate that
-/// created it (it owns a native pointer).
+/// corpus use the `…Async` methods (background isolate) or create the corpus on
+/// a background isolate so searching does not jank the UI. A `FuzzyCorpus` owns
+/// a native pointer and must only be used on the isolate that created it.
 library;
 
 import 'dart:convert';
@@ -23,16 +29,6 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
-
-/// Match algorithm for a query (mirrors the C `ffz_mode`).
-///
-/// [fuzzy] also parses the query into space-separated terms and fzf-style
-/// operators (`!` negate, `^` prefix, `'` substring, `$` suffix) — so a
-/// multi-word query like `'lib parse'` is an AND of terms (this is what
-/// `perf/PERF.md` calls "word"). The other modes treat the whole query as one
-/// literal atom: [substring]/[prefix]/[postfix] match a contiguous run, [exact]
-/// matches the whole string.
-enum FuzzyMode { fuzzy, substring, prefix, postfix, exact }
 
 /// Case handling (mirrors `ffz_case_matching`).
 enum FuzzyCase { respect, ignore, smart }
@@ -54,6 +50,61 @@ extension FuzzyKeyKindCode on FuzzyKeyKind {
       };
 }
 
+FuzzyKeyKind _kindOf(int v) => switch (v) {
+      0 => FuzzyKeyKind.original,
+      1 => FuzzyKeyKind.pinyin,
+      2 => FuzzyKeyKind.initials,
+      3 => FuzzyKeyKind.romaji,
+      _ => FuzzyKeyKind.custom,
+    };
+
+/// Search options. Set the corpus-wide defaults on the [FuzzyCorpus]
+/// constructor; the mode methods ([FuzzyCorpus.fuzzy], etc.) override individual
+/// fields per call via their named parameters. Every field has a sensible
+/// default, so `const FuzzyOptions()` is the common starting point.
+///
+/// - [caseMatching]/[normalization]: per-query case & diacritic handling.
+/// - [parallel]/[threads]: multi-threaded scoring (`threads:0` = auto, half the
+///   CPUs capped at 8; a hard ceiling of cpu-1 always applies; corpora < 512
+///   items run single-threaded regardless).
+/// - [limit]: max hits to return (`0` = all).
+/// - [highlight]: when false, match indices are skipped (faster, no [FuzzyHit.indices]).
+class FuzzyOptions {
+  final FuzzyCase caseMatching;
+  final FuzzyNorm normalization;
+  final bool parallel;
+  final int threads;
+  final int limit;
+  final bool highlight;
+
+  const FuzzyOptions({
+    this.caseMatching = FuzzyCase.smart,
+    this.normalization = FuzzyNorm.smart,
+    this.parallel = false,
+    this.threads = 0,
+    this.limit = 0,
+    this.highlight = true,
+  });
+
+  /// A copy with the given fields replaced (null keeps the current value).
+  FuzzyOptions copyWith({
+    FuzzyCase? caseMatching,
+    FuzzyNorm? normalization,
+    bool? parallel,
+    int? threads,
+    int? limit,
+    bool? highlight,
+  }) =>
+      FuzzyOptions(
+        caseMatching: caseMatching ?? this.caseMatching,
+        normalization: normalization ?? this.normalization,
+        parallel: parallel ?? this.parallel,
+        threads: threads ?? this.threads,
+        limit: limit ?? this.limit,
+        highlight: highlight ?? this.highlight,
+      );
+}
+
 /// An alternate search key for an item (e.g. host-computed pinyin/romaji), for
 /// [FuzzyCorpus.addKeyed]. [kind] is a [FuzzyKeyKind] code (use `FuzzyKeyKind.x.code`)
 /// or any host-defined value >= 100.
@@ -64,14 +115,6 @@ class FuzzyKey {
   FuzzyKey.kind(this.text, FuzzyKeyKind kind) : kind = kind.code;
 }
 
-FuzzyKeyKind _kindOf(int v) => switch (v) {
-      0 => FuzzyKeyKind.original,
-      1 => FuzzyKeyKind.pinyin,
-      2 => FuzzyKeyKind.initials,
-      3 => FuzzyKeyKind.romaji,
-      _ => FuzzyKeyKind.custom,
-    };
-
 /// Thrown when the native library can't be loaded or a symbol is missing.
 class FuzzyException implements Exception {
   final String message;
@@ -80,21 +123,25 @@ class FuzzyException implements Exception {
   String toString() => 'FuzzyException: $message';
 }
 
-/// One search result. [index] is the item's insertion order; [indices] are the
-/// matched **codepoint** positions within the matched key — use
-/// [fuzzyCodepointToUtf16] before applying them to a Dart `String`.
-class FuzzyHit {
+/// One search result for a [FuzzyCorpus] of `T`.
+///
+/// [obj] is the original item that matched. [index] is its insertion order in
+/// the corpus. [indices] are the matched **codepoint** positions within the
+/// matched key — use [fuzzyCodepointToUtf16] before applying them to a Dart
+/// `String`.
+class FuzzyHit<T> {
+  final T obj;
   final int index;
   final int score;
   final FuzzyKeyKind matchedKind;
   final int matchedKey; // which key of the item matched (0 == original)
   final List<int> indices;
-  const FuzzyHit(
-      this.index, this.score, this.matchedKind, this.matchedKey, this.indices);
+  const FuzzyHit(this.obj, this.index, this.score, this.matchedKind,
+      this.matchedKey, this.indices);
 
   @override
   String toString() =>
-      'FuzzyHit(index: $index, score: $score, kind: $matchedKind)';
+      'FuzzyHit(index: $index, score: $score, kind: $matchedKind, obj: $obj)';
 }
 
 /// Convert codepoint indices (as in [FuzzyHit.indices]) to UTF-16 code-unit
@@ -253,80 +300,212 @@ extension on String {
   }
 }
 
-/// A resident corpus of items that can be fuzzy/substring/prefix/etc. filtered.
-/// Release with [dispose], or rely on the [NativeFinalizer] on GC.
-class FuzzyCorpus implements Finalizable {
-  /// [matchPaths] tunes delimiters for path-like text; [preferPrefix] biases
-  /// scoring toward matches near the start. [libraryPath] loads a specific
-  /// native library file (tests / non-bundled use).
+// Native ffz_mode codes. Exposed to users as methods, not an enum/flag.
+const int _mFuzzy = 0;
+const int _mSubstring = 1;
+const int _mPrefix = 2;
+const int _mPostfix = 3;
+const int _mExact = 4;
+
+// A sendable raw result row (no `T`), read from native on any isolate; the
+// owner isolate maps it to a FuzzyHit<T> by looking [index] up in its items.
+class _RawHit {
+  final int index;
+  final int score;
+  final int kind;
+  final int key;
+  final List<int> indices;
+  const _RawHit(this.index, this.score, this.kind, this.key, this.indices);
+}
+
+String _identityString(String s) => s;
+
+/// A resident corpus of `T` items, searchable by [fuzzy]/[substring]/[prefix]/
+/// [postfix]/[exact]. Build it once, search it many times; release the native
+/// memory with [dispose] (or rely on the [NativeFinalizer] on GC).
+///
+/// Each item's searchable text comes from [stringOf]. Results ([FuzzyHit.obj])
+/// carry the original `T`. For plain strings use [FuzzyCorpus.strings].
+class FuzzyCorpus<T> implements Finalizable {
+  /// [stringOf] extracts the searchable text from each item. [options] are the
+  /// default search options (overridable per call). [matchPaths] tunes
+  /// delimiters for path-like text; [preferPrefix] biases scoring toward matches
+  /// near the start. [libraryPath] loads a specific native library file (tests /
+  /// non-bundled use).
   FuzzyCorpus(
-      {bool matchPaths = false, bool preferPrefix = false, String? libraryPath})
-      : _l = _Lib.resolve(libraryPath),
+    Iterable<T> items, {
+    required String Function(T) stringOf,
+    this.options = const FuzzyOptions(),
+    bool matchPaths = false,
+    bool preferPrefix = false,
+    String? libraryPath,
+  })  : _stringOf = stringOf,
+        _l = _Lib.resolve(libraryPath),
         _libPath = libraryPath {
     _ptr = _l.newCfg(matchPaths ? 1 : 0, preferPrefix ? 1 : 0);
     if (_ptr == nullptr) {
       throw const FuzzyException('ffz_ffi_new_cfg returned null');
     }
     _l.finalizer.attach(this, _ptr.cast(), detach: this);
+    addAll(items);
   }
 
+  /// Convenience constructor for a corpus of plain strings (the item is its own
+  /// search text). Equivalent to `FuzzyCorpus<String>(items, stringOf: (s) => s)`.
+  static FuzzyCorpus<String> strings(
+    Iterable<String> items, {
+    FuzzyOptions options = const FuzzyOptions(),
+    bool matchPaths = false,
+    bool preferPrefix = false,
+    String? libraryPath,
+  }) =>
+      FuzzyCorpus<String>(
+        items,
+        stringOf: _identityString,
+        options: options,
+        matchPaths: matchPaths,
+        preferPrefix: preferPrefix,
+        libraryPath: libraryPath,
+      );
+
+  /// Default search options, applied unless overridden on a mode method call.
+  final FuzzyOptions options;
+
+  final String Function(T) _stringOf;
   final _Lib _l;
-  final String? _libPath; // remembered so filterAsync can reopen on a worker
+  final String? _libPath; // remembered so async calls can reopen on a worker
+
+  // Dart-side mirror of the native corpus, kept 1:1 with native indices so a
+  // hit's index resolves back to its object. `_keys[i]` is the alternate-key
+  // list for item i (null = added without keys).
+  final List<T> _items = [];
+  final List<List<FuzzyKey>?> _keys = [];
+
   late final Pointer<Void> _ptr;
   bool _disposed = false;
-  int _inFlight = 0; // pending filterAsync calls reading the native corpus
+  int _inFlight = 0; // pending async searches reading the native corpus
 
   void _check() {
     if (_disposed) throw StateError('FuzzyCorpus used after dispose()');
   }
 
-  // Mutating/freeing the corpus while a filterAsync reads it from a worker
+  // Mutating/freeing the corpus while an async search reads it from a worker
   // isolate would be a native use-after-free; refuse with a catchable error.
   void _checkMutate() {
     _check();
     if (_inFlight > 0) {
       throw StateError(
-          'FuzzyCorpus mutated while $_inFlight filterAsync call(s) in flight');
+          'FuzzyCorpus mutated while $_inFlight async search(es) in flight');
     }
   }
 
-  void add(String item) {
-    _checkMutate();
-    final u = item._toUtf8();
-    _l.add(_ptr, u.ptr, u.len);
-    malloc.free(u.ptr);
-  }
-
-  void addAll(Iterable<String> items) {
+  /// Number of items in the corpus.
+  int get length {
     _check();
-    for (final s in items) {
-      add(s);
+    return _items.length;
+  }
+
+  /// Append one item.
+  void add(T item) {
+    _checkMutate();
+    _items.add(item);
+    _keys.add(null);
+    _nativeAdd(item, null);
+  }
+
+  /// Append many items (insertion order becomes each hit's [FuzzyHit.index]).
+  void addAll(Iterable<T> items) {
+    _checkMutate();
+    for (final it in items) {
+      _items.add(it);
+      _keys.add(null);
+      _nativeAdd(it, null);
     }
   }
 
-  /// Add [item] with explicit alternate search [keys] — e.g. host-computed
+  /// Append [item] with explicit alternate search [keys] — e.g. host-computed
   /// pinyin/romaji/initials, so a CJK item is findable by typing latin. The
-  /// ORIGINAL key (the item text) is added automatically. A hit reports which
-  /// key matched via [FuzzyHit.matchedKind]/[FuzzyHit.matchedKey].
+  /// ORIGINAL key ([stringOf] of the item) is added automatically. A hit reports
+  /// which key matched via [FuzzyHit.matchedKind]/[FuzzyHit.matchedKey].
   /// ```dart
-  /// corpus.addKeyed('张三', [
+  /// corpus.addKeyed(zhang, [
   ///   FuzzyKey.kind('zhangsan', FuzzyKeyKind.pinyin),
   ///   FuzzyKey.kind('zs', FuzzyKeyKind.initials),
   /// ]);
   /// ```
-  void addKeyed(String item, List<FuzzyKey> keys) {
+  void addKeyed(T item, List<FuzzyKey> keys) {
     _checkMutate();
+    final ks = keys.isEmpty ? null : keys;
+    _items.add(item);
+    _keys.add(ks);
+    _nativeAdd(item, ks);
+  }
+
+  /// Replace the item at [index] (its alternate keys, if any, are dropped).
+  /// O(n): the native corpus is append-only, so this rebuilds it.
+  void update(int index, T item) {
+    _checkMutate();
+    _items[index] = item;
+    _keys[index] = null;
+    _rebuild();
+  }
+
+  /// Remove the item at [index]. O(n) (rebuilds the native corpus).
+  void removeAt(int index) {
+    _checkMutate();
+    _items.removeAt(index);
+    _keys.removeAt(index);
+    _rebuild();
+  }
+
+  /// Remove every item matching [test]. O(n) (rebuilds the native corpus once).
+  void removeWhere(bool Function(T item) test) {
+    _checkMutate();
+    for (var i = _items.length - 1; i >= 0; i--) {
+      if (test(_items[i])) {
+        _items.removeAt(i);
+        _keys.removeAt(i);
+      }
+    }
+    _rebuild();
+  }
+
+  /// Rebuild the native corpus from the current items — call after the text
+  /// returned by [stringOf] for existing items has changed. O(n).
+  void refresh() {
+    _checkMutate();
+    _rebuild();
+  }
+
+  /// Remove all items (the corpus stays usable).
+  void clear() {
+    _checkMutate();
+    _items.clear();
+    _keys.clear();
+    _l.clear(_ptr);
+  }
+
+  void _rebuild() {
+    _l.clear(_ptr);
+    for (var i = 0; i < _items.length; i++) {
+      _nativeAdd(_items[i], _keys[i]);
+    }
+  }
+
+  void _nativeAdd(T item, List<FuzzyKey>? keys) {
+    final s = _stringOf(item);
+    if (keys == null) {
+      final u = s._toUtf8();
+      _l.add(_ptr, u.ptr, u.len);
+      malloc.free(u.ptr);
+      return;
+    }
     final f = _l.addKeyed;
     if (f == null) {
       throw const FuzzyException('ffz_ffi_add_keyed missing in native library');
     }
-    final iu = item._toUtf8();
+    final iu = s._toUtf8();
     final n = keys.length;
-    if (n == 0) {
-      _l.add(_ptr, iu.ptr, iu.len);
-      malloc.free(iu.ptr);
-      return;
-    }
     final texts = malloc<Pointer<Utf8>>(n);
     final lens = malloc<Size>(n);
     final kinds = malloc<Int32>(n);
@@ -351,73 +530,185 @@ class FuzzyCorpus implements Finalizable {
     }
   }
 
-  int get length {
+  // ── search: one method per mode (sync) + an async twin ─────────────────────
+
+  /// fzf-style subsequence match. The query is parsed into space-separated terms
+  /// and operators (`!` negate, `^` prefix, `'` substring, `$` suffix) — so
+  /// `'lib parse'` is an AND of terms.
+  List<FuzzyHit<T>> fuzzy(String query,
+          {FuzzyCase? caseMatching,
+          FuzzyNorm? normalization,
+          bool? parallel,
+          int? threads,
+          int? limit,
+          bool? highlight}) =>
+      _search(
+          _mFuzzy,
+          query,
+          _eff(caseMatching, normalization, parallel, threads, limit,
+              highlight));
+
+  /// Contiguous-substring match (the whole query as one literal atom).
+  List<FuzzyHit<T>> substring(String query,
+          {FuzzyCase? caseMatching,
+          FuzzyNorm? normalization,
+          bool? parallel,
+          int? threads,
+          int? limit,
+          bool? highlight}) =>
+      _search(
+          _mSubstring,
+          query,
+          _eff(caseMatching, normalization, parallel, threads, limit,
+              highlight));
+
+  /// Prefix match (the item starts with the query).
+  List<FuzzyHit<T>> prefix(String query,
+          {FuzzyCase? caseMatching,
+          FuzzyNorm? normalization,
+          bool? parallel,
+          int? threads,
+          int? limit,
+          bool? highlight}) =>
+      _search(
+          _mPrefix,
+          query,
+          _eff(caseMatching, normalization, parallel, threads, limit,
+              highlight));
+
+  /// Suffix match (the item ends with the query).
+  List<FuzzyHit<T>> postfix(String query,
+          {FuzzyCase? caseMatching,
+          FuzzyNorm? normalization,
+          bool? parallel,
+          int? threads,
+          int? limit,
+          bool? highlight}) =>
+      _search(
+          _mPostfix,
+          query,
+          _eff(caseMatching, normalization, parallel, threads, limit,
+              highlight));
+
+  /// Exact, whole-string match.
+  List<FuzzyHit<T>> exact(String query,
+          {FuzzyCase? caseMatching,
+          FuzzyNorm? normalization,
+          bool? parallel,
+          int? threads,
+          int? limit,
+          bool? highlight}) =>
+      _search(
+          _mExact,
+          query,
+          _eff(caseMatching, normalization, parallel, threads, limit,
+              highlight));
+
+  /// Async [fuzzy] — runs the native scan + marshaling on a background isolate.
+  Future<List<FuzzyHit<T>>> fuzzyAsync(String query,
+          {FuzzyCase? caseMatching,
+          FuzzyNorm? normalization,
+          bool? parallel,
+          int? threads,
+          int? limit,
+          bool? highlight}) =>
+      _searchAsync(
+          _mFuzzy,
+          query,
+          _eff(caseMatching, normalization, parallel, threads, limit,
+              highlight));
+
+  /// Async [substring].
+  Future<List<FuzzyHit<T>>> substringAsync(String query,
+          {FuzzyCase? caseMatching,
+          FuzzyNorm? normalization,
+          bool? parallel,
+          int? threads,
+          int? limit,
+          bool? highlight}) =>
+      _searchAsync(
+          _mSubstring,
+          query,
+          _eff(caseMatching, normalization, parallel, threads, limit,
+              highlight));
+
+  /// Async [prefix].
+  Future<List<FuzzyHit<T>>> prefixAsync(String query,
+          {FuzzyCase? caseMatching,
+          FuzzyNorm? normalization,
+          bool? parallel,
+          int? threads,
+          int? limit,
+          bool? highlight}) =>
+      _searchAsync(
+          _mPrefix,
+          query,
+          _eff(caseMatching, normalization, parallel, threads, limit,
+              highlight));
+
+  /// Async [postfix].
+  Future<List<FuzzyHit<T>>> postfixAsync(String query,
+          {FuzzyCase? caseMatching,
+          FuzzyNorm? normalization,
+          bool? parallel,
+          int? threads,
+          int? limit,
+          bool? highlight}) =>
+      _searchAsync(
+          _mPostfix,
+          query,
+          _eff(caseMatching, normalization, parallel, threads, limit,
+              highlight));
+
+  /// Async [exact].
+  Future<List<FuzzyHit<T>>> exactAsync(String query,
+          {FuzzyCase? caseMatching,
+          FuzzyNorm? normalization,
+          bool? parallel,
+          int? threads,
+          int? limit,
+          bool? highlight}) =>
+      _searchAsync(
+          _mExact,
+          query,
+          _eff(caseMatching, normalization, parallel, threads, limit,
+              highlight));
+
+  FuzzyOptions _eff(FuzzyCase? cm, FuzzyNorm? nm, bool? par, int? th, int? lim,
+          bool? hl) =>
+      options.copyWith(
+          caseMatching: cm,
+          normalization: nm,
+          parallel: par,
+          threads: th,
+          limit: lim,
+          highlight: hl);
+
+  List<FuzzyHit<T>> _search(int mode, String query, FuzzyOptions o) {
     _check();
-    return _l.len(_ptr);
+    return _toHits(_rawFilter(_l, _ptr, query, mode, o));
   }
 
-  /// Remove all items (the corpus stays usable).
-  void clear() {
-    _checkMutate();
-    _l.clear(_ptr);
-  }
-
-  /// Filter the corpus.
-  ///
-  /// [parallel]/[threads]: multi-threaded scoring (`threads:0` = auto, half the
-  /// CPUs capped at 8; a hard ceiling of cpu-1 always applies; corpora < 512
-  /// items run single-threaded). [limit] == 0 returns all matches.
-  /// [highlight] false skips reading match indices.
-  List<FuzzyHit> filter(
-    String query, {
-    FuzzyMode mode = FuzzyMode.fuzzy,
-    FuzzyCase caseMatching = FuzzyCase.smart,
-    FuzzyNorm normalization = FuzzyNorm.smart,
-    bool parallel = false,
-    int threads = 0,
-    int limit = 0,
-    bool highlight = true,
-  }) {
-    _check();
-    return _filterWith(_l, _ptr, query, mode.index, caseMatching.index,
-        normalization.index, parallel ? 1 : 0, threads, limit, highlight);
-  }
-
-  /// Like [filter] but runs the native scan + result marshaling on a background
-  /// isolate, so a large corpus never janks the UI isolate. Combine with
-  /// `parallel: true` to also fan the C scan across threads. Multiple
-  /// `filterAsync` calls may overlap safely (each gets its own native matcher).
-  ///
-  /// The corpus's native memory is process-global, so the worker reads it
-  /// directly. While a `filterAsync` is in flight, [add]/[addKeyed]/[clear]/
-  /// [dispose] throw [StateError] (mutating it would be a native
-  /// use-after-free). Awaiting the returned future also keeps this corpus alive
-  /// across the call, so the finalizer can't free it mid-scan — but do keep a
-  /// reference and don't drop the future if you rely on that.
-  Future<List<FuzzyHit>> filterAsync(
-    String query, {
-    FuzzyMode mode = FuzzyMode.fuzzy,
-    FuzzyCase caseMatching = FuzzyCase.smart,
-    FuzzyNorm normalization = FuzzyNorm.smart,
-    bool parallel = false,
-    int threads = 0,
-    int limit = 0,
-    bool highlight = true,
-  }) async {
+  /// Runs the native scan + result marshaling on a background isolate, so a
+  /// large corpus never janks the UI isolate. Multiple async calls may overlap
+  /// safely (each gets its own native matcher). While one is in flight,
+  /// mutating ([add]/[update]/[removeAt]/[clear]/…) or [dispose] throws
+  /// [StateError]. Awaiting the future also keeps this corpus alive across the
+  /// call so the finalizer can't free it mid-scan.
+  Future<List<FuzzyHit<T>>> _searchAsync(
+      int mode, String query, FuzzyOptions o) async {
     _check();
     final addr = _ptr.address;
     final libPath = _libPath;
-    final m = mode.index, cmI = caseMatching.index, nmI = normalization.index;
-    final par = parallel ? 1 : 0;
     _inFlight++;
     try {
-      return await Isolate.run(() {
+      final raws = await Isolate.run(() {
         // New isolate: statics are fresh, so reopen the library (the OS returns
         // the already-loaded image) and address the shared corpus by pointer.
         final lib = _Lib.resolve(libPath);
-        return _filterWith(lib, Pointer<Void>.fromAddress(addr), query, m, cmI,
-            nmI, par, threads, limit, highlight);
+        return _rawFilter(lib, Pointer<Void>.fromAddress(addr), query, mode, o);
       });
+      return _toHits(raws);
     } finally {
       // Touching the instance field after the await keeps `this` (and thus the
       // native corpus) reachable for the whole call, defeating the finalizer.
@@ -425,49 +716,46 @@ class FuzzyCorpus implements Finalizable {
     }
   }
 
-  // Shared native call + result read, usable on any isolate (the FuzzyHit list it
-  // returns is sendable). `ptr` must be a live corpus in this process.
-  static List<FuzzyHit> _filterWith(
-      _Lib lib,
-      Pointer<Void> ptr,
-      String query,
-      int mode,
-      int cm,
-      int nm,
-      int par,
-      int threads,
-      int limit,
-      bool highlight) {
+  List<FuzzyHit<T>> _toHits(List<_RawHit> raws) => [
+        for (final r in raws)
+          FuzzyHit<T>(_items[r.index], r.index, r.score, _kindOf(r.kind), r.key,
+              r.indices)
+      ];
+
+  // Shared native call + result read, usable on any isolate (the returned list
+  // is sendable). `ptr` must be a live corpus in this process.
+  static List<_RawHit> _rawFilter(
+      _Lib lib, Pointer<Void> ptr, String query, int mode, FuzzyOptions o) {
     final u = query._toUtf8();
-    final r =
-        lib.filterEx(ptr, u.ptr, u.len, mode, cm, nm, par, threads, limit);
+    final r = lib.filterEx(ptr, u.ptr, u.len, mode, o.caseMatching.index,
+        o.normalization.index, o.parallel ? 1 : 0, o.threads, o.limit);
     malloc.free(u.ptr);
     if (r == nullptr) {
       throw const FuzzyException('filter failed (out of memory)');
     }
     final n = lib.rLen(r);
-    final out = <FuzzyHit>[];
+    final out = <_RawHit>[];
     for (var i = 0; i < n; i++) {
       List<int> idx = const [];
-      if (highlight) {
+      if (o.highlight) {
         final ni = lib.rNIdx(r, i);
         idx = List<int>.generate(ni, (j) => lib.rIdx(r, i, j), growable: false);
       }
-      out.add(FuzzyHit(lib.rItem(r, i), lib.rScore(r, i),
-          _kindOf(lib.rKind(r, i)), lib.rKey(r, i), idx));
+      out.add(_RawHit(lib.rItem(r, i), lib.rScore(r, i), lib.rKind(r, i),
+          lib.rKey(r, i), idx));
     }
     lib.rFree(r);
     return out;
   }
 
-  /// Release native memory now. Idempotent. Throws [StateError] if a
-  /// [filterAsync] is still in flight (freeing would be a use-after-free) —
-  /// await the pending futures first.
+  /// Release native memory now. Idempotent. Throws [StateError] if an async
+  /// search is still in flight (freeing would be a use-after-free) — await the
+  /// pending futures first.
   void dispose() {
     if (_disposed) return;
     if (_inFlight > 0) {
       throw StateError(
-          'FuzzyCorpus.dispose() with $_inFlight filterAsync call(s) in flight');
+          'FuzzyCorpus.dispose() with $_inFlight async search(es) in flight');
     }
     _disposed = true;
     _l.finalizer.detach(this);
@@ -493,9 +781,9 @@ class FuzzyCorpus implements Finalizable {
 /// This is opt-in (it installs process-wide signal handlers; call it once at
 /// startup, before your other crash reporter if you chain them):
 /// ```dart
-/// final report = FuzzyCrash.lastReport();      // previous run's crash, if any
-/// if (report != null) log('ffz last crash:\n$report');
-/// FuzzyCrash.install(breadcrumbPath: '${dir.path}/ffz_crash.log');
+/// final report = FuzzyCrash.lastReport();    // previous run's crash, if any
+/// if (report != null) log('ffuzzy last crash:\n$report');
+/// FuzzyCrash.install(breadcrumbPath: '${dir.path}/ffuzzy_crash.log');
 /// ```
 class FuzzyCrash {
   FuzzyCrash._();

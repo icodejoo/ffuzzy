@@ -34,14 +34,13 @@ class SearchPage extends StatefulWidget {
 }
 
 class _SearchPageState extends State<SearchPage> {
-  late final FuzzyCorpus _corpus;
-  List<FuzzyHit> _hits = const [];
+  late final FuzzyCorpus<String> _corpus;
+  List<FuzzyHit<String>> _hits = const [];
 
   @override
   void initState() {
     super.initState();
-    _corpus = FuzzyCorpus(matchPaths: true);
-    _corpus.addAll(_items);
+    _corpus = FuzzyCorpus.strings(_items, matchPaths: true);
     // Index the CJK item by host-computed pinyin/initials so latin typing finds it.
     _corpus.addKeyed('中文搜索引擎', [
       FuzzyKey.kind('zhongwensousuoyinqing', FuzzyKeyKind.pinyin),
@@ -51,8 +50,8 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   Future<void> _search(String q) async {
-    // filterAsync keeps the UI smooth even for a large corpus.
-    final hits = await _corpus.filterAsync(q, limit: 50);
+    // fuzzyAsync keeps the UI smooth even for a large corpus.
+    final hits = await _corpus.fuzzyAsync(q, limit: 50);
     if (mounted) setState(() => _hits = hits);
   }
 
@@ -85,7 +84,7 @@ class _SearchPageState extends State<SearchPage> {
               itemBuilder: (context, i) {
                 final hit = _hits[i];
                 // matchedKey 0 == the original item; only highlight then.
-                final text = _items[hit.index];
+                final text = hit.obj;
                 final highlight = hit.matchedKey == 0
                     ? fuzzyCodepointToUtf16(text, hit.indices).toSet()
                     : const <int>{};

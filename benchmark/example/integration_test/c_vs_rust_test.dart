@@ -56,8 +56,7 @@ void main() {
     final base = ProcessInfo.currentRss;
 
     // C resident corpus via the bundled plugin native library (no path).
-    final c = FuzzyCorpus();
-    c.addAll(items);
+    final c = FuzzyCorpus.strings(items);
     final afterC = ProcessInfo.currentRss;
     final memC = afterC - base;
 
@@ -69,8 +68,8 @@ void main() {
 
     // correctness: identical match SETS (rank/order ignored) for each query.
     for (final q in queries) {
-      final cSet = c.filter(q, mode: FuzzyMode.fuzzy, highlight: false)
-          .map((h) => h.index).toSet();
+      final cSet =
+          c.fuzzy(q, highlight: false).map((h) => h.index).toSet();
       final rSet = r.match(q).map((h) => h.index).toSet();
       expect(cSet, rSet, reason: 'identical matched items for "$q"');
     }
@@ -81,7 +80,7 @@ void main() {
     final swC = Stopwatch()..start();
     for (var i = 0; i < reps; i++) {
       for (final q in queries) {
-        sink += c.filter(q, mode: FuzzyMode.fuzzy, parallel: true, limit: 50).length;
+        sink += c.fuzzy(q, parallel: true, limit: 50).length;
       }
     }
     swC.stop();
