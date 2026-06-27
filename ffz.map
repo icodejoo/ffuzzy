@@ -9,9 +9,11 @@
     ffz_matcher_new; ffz_matcher_free; ffz_matcher_config; ffz_match;
     ffz_pattern_parse; ffz_pattern_new; ffz_pattern_free; ffz_pattern_match;
     ffz_corpus_new; ffz_corpus_free; ffz_corpus_set_transliterator;
-    ffz_corpus_add; ffz_corpus_len; ffz_corpus_clear; ffz_corpus_filter;
+    ffz_corpus_add; ffz_corpus_add_keyed; ffz_corpus_len; ffz_corpus_clear;
+    ffz_corpus_filter; ffz_corpus_scoring;
     ffz_results_free;
     ffz_parallel_off; ffz_parallel_auto; ffz_parallel_with;
+    ffz_ffi_new_cfg2; ffz_ffi_filter_ex2;
   local:
     *;
 };

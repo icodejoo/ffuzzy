@@ -44,6 +44,14 @@ FFZ_API ffz_corpus *ffz_ffi_new_cfg(int paths, int prefer_prefix) {
     cfg.prefer_prefix = prefer_prefix != 0;
     return ffz_corpus_new(cfg);
 }
+// Like ffz_ffi_new_cfg but also sets the corpus-level scoring mode.
+// scoring: 0=FAST (default), 1=OFF, 2=NUCLEO.
+FFZ_API ffz_corpus *ffz_ffi_new_cfg2(int paths, int prefer_prefix, int scoring) {
+    ffz_config cfg = paths ? ffz_config_match_paths() : ffz_config_default();
+    cfg.prefer_prefix = prefer_prefix != 0;
+    cfg.scoring_mode  = (ffz_scoring_mode)scoring;
+    return ffz_corpus_new(cfg);
+}
 FFZ_API void ffz_ffi_add(ffz_corpus *c, const char *s, size_t n) {
     ffz_corpus_add(c, s, n);
 }
@@ -70,17 +78,28 @@ FFZ_API void ffz_ffi_free(ffz_corpus *c) { ffz_corpus_free(c); }
 
 // --- filter: mode 0=fuzzy 1=substring 2=prefix 3=postfix 4=exact (word);
 //     cm 0=respect 1=ignore 2=smart;  nm 0=never 1=smart ---------------------
-FFZ_API ffz_results *ffz_ffi_filter_ex(ffz_corpus *c, const char *q, size_t qn,
-                                       int mode, int cm, int nm, int parallel,
-                                       int threads, size_t limit) {
+// Like ffz_ffi_filter_ex but takes an explicit scoring mode. The Dart layer
+// passes the already-resolved effective scoring (corpus default merged with
+// per-call override). scoring: 0=FAST, 1=OFF, 2=NUCLEO.
+FFZ_API ffz_results *ffz_ffi_filter_ex2(ffz_corpus *c, const char *q, size_t qn,
+                                        int mode, int cm, int nm,
+                                        int parallel, int threads,
+                                        size_t limit, int scoring) {
     ffz_results *r = (ffz_results *)calloc(1, sizeof(ffz_results));
     if (!r) return NULL;
     ffz_parallel par;
     par.parallel = parallel != 0;
-    par.threads = threads;
+    par.threads  = threads;
     ffz_corpus_filter(c, q, qn, (ffz_case_matching)cm, (ffz_normalization)nm,
-                      (ffz_mode)mode, par, limit, ffz_corpus_scoring(c), r);
+                      (ffz_mode)mode, par, limit, (ffz_scoring_mode)scoring, r);
     return r;
+}
+FFZ_API ffz_results *ffz_ffi_filter_ex(ffz_corpus *c, const char *q, size_t qn,
+                                       int mode, int cm, int nm, int parallel,
+                                       int threads, size_t limit) {
+    // Old callers get FAST (the new default) for backward compatibility.
+    return ffz_ffi_filter_ex2(c, q, qn, mode, cm, nm, parallel, threads, limit,
+                              FFZ_SCORE_FAST);
 }
 // Back-compat default (smart case + smart normalize).
 FFZ_API ffz_results *ffz_ffi_filter(ffz_corpus *c, const char *q, size_t qn,
