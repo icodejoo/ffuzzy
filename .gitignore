@@ -39,6 +39,12 @@ build/
 /wasm/*.js
 *.o
 *.a
+*.obj
+*.dll
+*.lib
+*.pdb
+*.exp
+*.map
 *.exe
 tools/__pycache__/
 tests/difftest/target/
@@ -56,6 +62,25 @@ tests/perf/q_*.txt
 tests/perf/results.csv
 
 # 编译产物(DLL/so/dylib)不入库
-*.dll
 *.so
 *.dylib
+
+# C 库 Android 跨平台编译输出(本地 make cross，不入库)
+build_arm64/
+build_armeabi/
+build_x86_64/
+
+# 旧 Rust 基准(仅本地对比用)的构建产物、便携 bundle 与签名私钥
+rust/target/
+ffuzzy.bundle
+benchmark/ffuzzy.bundle
+precompiled_signing_key.PRIVATE.txt
+
+# Flutter ephemeral 目录(flutter pub get/build 自动生成)
+**/flutter/ephemeral/
+
+# 本地环境配置(含机器相关路径，绝不入库)
+example/android/local.properties
+
+# 备份文件
+*.bak
