@@ -1,5 +1,7 @@
 # ffuzzy
 
+English | [中文](README.zh-CN.md)
+
 Fast fuzzy search for Flutter, powered by a compact **C** engine via `dart:ffi`.
 
 `ffuzzy` is a byte-for-byte reimplementation of [`nucleo`](https://github.com/helix-editor/nucleo)
@@ -91,13 +93,12 @@ static FuzzyCorpus<Map<String, dynamic>> FuzzyCorpus.keyed(
 // Build a (large) corpus with the inserts on a background isolate — no UI jank:
 static Future<FuzzyCorpus<T>> FuzzyCorpus.buildAsync<T>(
     Iterable<T> items, {required String Function(T) stringOf, …})
-
-// One-shot best match — no corpus to keep/dispose. Returns FuzzyHit<T>? (null
-// if nothing matched). Don't call in a hot loop (rebuilds each time):
-static FuzzyHit<T>?              FuzzyCorpus.one<T>(items, query, {stringOf, …})
-static FuzzyHit<String>?         FuzzyCorpus.oneStrings(items, query, {…})
-static FuzzyHit<Map>?            FuzzyCorpus.oneKeyed(items, field, query, {…})
 ```
+
+> `strings`/`keyed`/`buildAsync` are static methods (not `factory` constructors)
+> because they pin the element type (`FuzzyCorpus<String>` / `<Map>`); a factory
+> on a generic class can't do that. Call syntax and performance are identical to
+> a constructor — they just delegate to `FuzzyCorpus(...)`.
 
 Throws [`FuzzyException`](#fuzzyexception) if the native library can't be loaded.
 
@@ -142,9 +143,11 @@ List<FuzzyHit<T>> exact(String query, {…overrides});      Future<…> exactAsy
   int? threads, int? limit, bool? highlight}`): each non-null argument overrides
   the corresponding field of the corpus's [`FuzzyOptions`](#fuzzyoptions) for that
   call only. e.g. `corpus.fuzzy(q, limit: 50)`.
-- **Best single hit:** on a persistent corpus, use `fuzzy(q, limit: 1)` (or any
-  mode) and take `.first`. For a one-off search without keeping a corpus, use
-  the static [`FuzzyCorpus.one` / `oneStrings` / `oneKeyed`](#constructors).
+- **Best single hit:** `corpus.one` is a view exposing the same five modes, each
+  returning `FuzzyHit<T>?` (the top hit, or null) instead of a list —
+  `corpus.one.fuzzy(q)`, `corpus.one.prefix(q)`, … (+ `…Async`). It runs the
+  **identical** native scan as `fuzzy(q, limit: 1)` — no extra cost. (Equivalent
+  to `fuzzy(q, limit: 1)` then taking `.first`.)
 
 `…Async` calls may overlap safely (each gets its own native matcher). While one
 is in flight, any mutation (`add`/`update`/`removeAt`/`clear`/…) or `dispose`

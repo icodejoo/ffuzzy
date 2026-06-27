@@ -13,7 +13,7 @@ description: Use when developing, building, testing, or publishing the ffuzzy Fl
 > - **原生库名 `libffz`/`ffz.dll`、C 符号 `ffz_*`、FFI 查找名 `ffz_ffi_*`、C 编译宏 `FFZ_*` 保持不变**。
 >   **Dart 公开 API 全部 `Fuzzy*` 前缀**(2026-06-27 从 `Ffz*` 改名 + 重设计,对齐 Rust 版能力):
 >   - `FuzzyCorpus<T>`(泛型对象搜索,构造传 `stringOf`);便捷构造 `FuzzyCorpus.strings(items)`、`FuzzyCorpus.keyed(maps, field)`(List<Map> 按字段)、`FuzzyCorpus.buildAsync(items, stringOf:)`(后台 isolate 建库)。
->   - **取最佳单条**:**没有 per-mode 的 `…Single` 方法**(已删)。常驻 corpus 用 `fuzzy(q, limit:1).first`;一次性(不建常驻)用静态 `FuzzyCorpus.one(items, q, stringOf:)` / `oneStrings(items, q)` / `oneKeyed(maps, field, q)`→ `FuzzyHit<T>?`(内部建临时 corpus→搜→dispose,**别在热循环里用**;默认 fuzzy 模式)。
+>   - **取最佳单条 = `corpus.one` 门面**(getter,`late final FuzzyOne<T> one`):同样 5 个模式方法 + async,但返回 `FuzzyHit<T>?`(top-1 或 null),如 `corpus.one.fuzzy(q)`。内部用 `_search(mode, q, _eff(...,limit:1,...))` 取 first,**与 `fuzzy(q, limit:1)` 同一次原生扫描、零额外开销**。曾经的 per-mode `…Single` 方法和 `one/oneStrings/oneKeyed` 静态法都已删除。`FuzzyOne<T>` 是公开类但只经 `corpus.one` 取得。
 >   - **模式是方法不是 flag**:`fuzzy`/`substring`/`prefix`/`postfix`/`exact`,各带 `…Async` 孪生。`FuzzyMode` 枚举已删,改为内部 int 常量。
 >   - `FuzzyOptions`(可选、含默认值,聚合 `caseMatching`/`normalization`/`parallel`/`threads`/`limit`/`highlight`):构造设 corpus 级默认,方法上可空命名参数逐字段覆盖(`copyWith` 合并)。
 >   - 增删改:`add`/`addAll`/`addAllAsync`(后台 isolate)/`addKeyed`/`update`/`removeAt`/`removeWhere`(返回删除数)/`refresh([source])`(无参重建 / 传 source 整体替换)/`clear`。**没有"单独索引"概念——原生 corpus 即索引,`add` 即建;`clear` 全清,重建=重新 add。原生 append-only,逐项删改在 Dart 侧 clear+重 add 重建(O(n));内部 `List<T> _items` + `List<List<FuzzyKey>?> _keys` 与原生下标 1:1**。

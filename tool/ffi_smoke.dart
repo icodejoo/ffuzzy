@@ -57,19 +57,15 @@ Future<void> main(List<String> args) async {
   if (c.fuzzy('README').isNotEmpty) throw 'removed item should not match';
   if (c.fuzzy('src').isEmpty) throw 'survivor should still match after rebuild';
 
-  // one-shot best match (static, no persistent corpus to keep/dispose).
-  if (FuzzyCorpus.oneStrings(['alpha', 'beta', 'gamma'], 'gam',
-          libraryPath: libPath) ==
-      null) {
-    throw 'oneStrings should find a hit';
+  // single-best view: corpus.one.<mode> returns the top hit (or null), running
+  // the same native scan as the list method with limit 1.
+  final best = c.one.fuzzy('src');
+  if (best == null || best.obj.isEmpty) {
+    throw 'one.fuzzy should find the best hit';
   }
-  if (FuzzyCorpus.oneStrings(['alpha'], 'zzz', libraryPath: libPath) != null) {
-    throw 'oneStrings should be null for no match';
+  if (c.one.exact('definitely-absent') != null) {
+    throw 'one.exact should be null for no match';
   }
-  final om = FuzzyCorpus.oneKeyed([
-    {'name': 'Carol'}
-  ], 'name', 'car', libraryPath: libPath);
-  if (om == null || om.obj['name'] != 'Carol') throw 'oneKeyed failed';
 
   // keyed: a List<Map> searched by a field; hit.obj is the whole map.
   final maps = FuzzyCorpus.keyed([
@@ -78,6 +74,8 @@ Future<void> main(List<String> args) async {
   ], 'name', libraryPath: libPath);
   final ml = maps.prefix('Al');
   if (ml.isEmpty || ml.first.obj['id'] != 1) throw 'keyed map search failed';
+  final mo = maps.one.prefix('Al');
+  if (mo == null || mo.obj['id'] != 1) throw 'keyed one.prefix failed';
   maps.dispose();
 
   // buildAsync: populate on a background isolate, search, then disposeAndWait.
