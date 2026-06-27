@@ -25,7 +25,7 @@ matcher)的纯 C 逐字节复刻:无需 Rust 工具链、无代码生成,引擎�
 
 ```yaml
 dependencies:
-  ffuzzy: ^0.3.0
+  ffuzzy: ^0.3.1
 ```
 
 ## 快速上手

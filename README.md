@@ -30,7 +30,7 @@ on its own. The native library is **~32 KB** stripped.
 
 ```yaml
 dependencies:
-  ffuzzy: ^0.3.0
+  ffuzzy: ^0.3.1
 ```
 
 ## Quick start

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0
+## 0.3.1
 
 **The `ffuzzy` engine is now the compact C matcher** (previously a separate `ffz`
 package). The original Rust + `flutter_rust_bridge` implementation is deprecated
