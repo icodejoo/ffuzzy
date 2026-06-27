@@ -1,22 +1,30 @@
 name: ffuzzy
-description: "高性能模糊搜索:基于 nucleo (Rust) + flutter_rust_bridge,支持对象/字符串搜索、命中高亮、同步/异步,十万级数据比常见纯 Dart 库快 45–300 倍。"
-version: 0.2.0
-homepage: https://github.com/icodejoo/ffuzzy
+description: >-
+  Fast fuzzy search for Flutter, powered by a compact C engine via dart:ffi:
+  fuzzy/substring/prefix/postfix/exact matching over a resident corpus,
+  multi-threading, async filtering, hit highlighting, and Unicode (CJK).
+version: 0.3.0
 repository: https://github.com/icodejoo/ffuzzy
+homepage: https://github.com/icodejoo/ffuzzy
+issue_tracker: https://github.com/icodejoo/ffuzzy/issues
+topics:
+  - fuzzy-search
+  - ffi
+  - matcher
+  - search
+  - unicode
 
 environment:
-  sdk: ">=3.3.0 <4.0.0"
-  flutter: ">=3.10.0"
+  sdk: ^3.4.0
+  flutter: '>=3.10.0'
 
 dependencies:
   flutter:
     sdk: flutter
-  flutter_rust_bridge: ^2.12.0
+  ffi: ^2.1.0
 
 dev_dependencies:
-  flutter_test:
-    sdk: flutter
-  flutter_lints: ^6.0.0
+  flutter_lints: ^4.0.0
 
 flutter:
   plugin:

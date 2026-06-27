@@ -1,20 +1,10 @@
-# The Flutter tooling requires that developers have a version of Visual Studio
-# installed that includes CMake 3.14 or later. You should not increase this
-# version, as doing so will cause the plugin to fail to compile for some
-# customers of the plugin.
+# Flutter Windows FFI-plugin native build: builds the ffz shared library from
+# the C sources (../../CMakeLists.txt) and tells Flutter to bundle it next to
+# the runner .exe (so DynamicLibrary.open('ffz.dll') resolves). MSVC-compatible.
 cmake_minimum_required(VERSION 3.14)
+project(ffz_library LANGUAGES C)
 
-# Project-level configuration.
-set(PROJECT_NAME "ffuzzy")
-project(${PROJECT_NAME} LANGUAGES CXX)
+# clang/CMakeLists.txt defines the `ffz` target (src/*.c + ffi/ffz_ffi.c).
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/.." ffz_native)
 
-include("../cargokit/cmake/cargokit.cmake")
-apply_cargokit(${PROJECT_NAME} ../rust rust_lib_ffuzzy "")
-
-# List of absolute paths to libraries that should be bundled with the plugin.
-# This list could contain prebuilt libraries, or libraries created by an
-# external build triggered from this build file.
-set(ffuzzy_bundled_libraries
-  "${${PROJECT_NAME}_cargokit_lib}"
-  PARENT_SCOPE
-)
+set(ffuzzy_bundled_libraries "$<TARGET_FILE:ffz>" PARENT_SCOPE)

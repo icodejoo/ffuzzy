@@ -1,599 +1,531 @@
-/// ffuzzy —— 基于 nucleo (Rust) + flutter_rust_bridge 的高性能模糊搜索。
+/// ffuzzy — idiomatic Dart binding for the compact C fuzzy matcher, via dart:ffi.
 ///
-/// 入口与公开 API:
-///  - [ffuzzy.ensureInitialized] 一次性初始化(懒加载、幂等)。
-///  - [FuzzyMatcher] 泛型搜索器(字符串/对象),`match` 返回 [FuzzyOutput]。
-///  - [FuzzyStringMatcher] 字符串搜索器,`match` 返回 [FuzzyHit]。
-///  - 独立函数 [fuzzyMatch] / [fuzzyMatchIndices] / [fuzzyFilter] / [fuzzyFilterAsync]。
-///  - 类型 [FuzzyConfig] / [FuzzyHit] / [FuzzyMatch] / [FuzzyOutput] / 常量 [kDefaultFuzzyConfig]。
+/// ```dart
+/// final corpus = FfzCorpus();                  // or matchPaths/preferPrefix
+/// corpus.addAll(['src/main.rs', 'lib/ffz.dart', '中文搜索']);
+/// final hits = corpus.filter('src', parallel: true, limit: 50);
+/// for (final h in hits) {
+///   final u16 = ffzCodepointToUtf16('src/main.rs', h.indices); // for TextSpan
+///   print('${h.index}  score=${h.score}  kind=${h.matchedKind}  $u16');
+/// }
+/// corpus.dispose();                             // or rely on the NativeFinalizer
+/// ```
+///
+/// NOTE: every call is synchronous and runs on the calling isolate; for a large
+/// corpus, create and use the `FfzCorpus` on a background isolate so `filter`
+/// does not jank the UI. An `FfzCorpus` must only be used on the isolate that
+/// created it (it owns a native pointer).
 library;
 
-// 入口类按品牌名小写 `ffuzzy`，豁免类型大驼峰命名 lint。
-// ignore_for_file: camel_case_types
+import 'dart:convert';
+import 'dart:ffi';
+import 'dart:io';
+import 'dart:isolate';
 
-import 'dart:async';
-import 'dart:collection';
-import 'dart:typed_data';
+import 'package:ffi/ffi.dart';
 
-import 'package:flutter/foundation.dart';
-
-import 'src/rust/api/fuzzy.dart';
-import 'src/rust/frb_generated.dart';
-
-export 'src/rust/api/fuzzy.dart'
-    show
-        FuzzyConfig,
-        FuzzyHit,
-        FuzzyMatch,
-        MatchMode,
-        fuzzyMatch,
-        fuzzyMatchIndices,
-        fuzzyFilter,
-        fuzzyFilterAsync;
-
-void _checkLimit(int? limit) {
-  if (limit != null && limit < 0) {
-    throw ArgumentError.value(limit, 'limit', 'limit 不能为负');
-  }
-}
-
-/// 默认配置:忽略大小写、Unicode 归一化、前缀优先(已规避 nucleo issue #92)。
-const FuzzyConfig kDefaultFuzzyConfig = FuzzyConfig(
-  ignoreCase: true,
-  normalize: true,
-  preferPrefix: true,
-  mode: MatchMode.fuzzy,
-  parallel: true,
-  incremental: false,
-);
-
-/// 插件入口:初始化收口。
-class ffuzzy {
-  ffuzzy._();
-
-  static Future<void>? _initFuture;
-  static bool _initialized = false;
-
-  /// 初始化底层 Rust 库。**懒加载 + 幂等**:首次调用真正初始化,之后立即返回同一个 Future;
-  /// 已初始化则直接跳过。可在 `main` 里 await,也可在「真正用之前」await。
-  static Future<void> ensureInitialized() =>
-      _initFuture ??= RustLib.init().then((_) => _initialized = true);
-
-  /// 初始化是否已**完成**(非"已开始")。同步搜索前应为 true。
-  static bool get isInitialized => _initialized;
-}
-
-/// 一条命中结果:[obj] 命中的原始对象、[score] 匹配分、[indices] 命中字符下标(用于高亮)。
-class FuzzyOutput<T> {
-  const FuzzyOutput(this.obj, this.score, this.indices);
-  final T obj;
-  final int score;
-  final Uint32List indices;
-}
-
-/// 匹配器基类:统一管理索引(index)的构建/释放、在飞异步排空、dispose 等生命周期。
+/// Match algorithm for a query (mirrors the C `ffz_mode`).
 ///
-/// 设计要点:
-///  - **从不自动建/重建索引**:`match`/`matchAsync` 有索引就用索引(快);无索引(未建、或已
-///    [freeIndices])则**退化为整表扫描**(慢,但不分配持久索引,也绝不偷偷把内存加回来)。
-///    要加速请显式 [buildIndices](已存在则跳过)或 [refresh]。
-///  - **[freeIndices] 只释放 Rust 侧索引**:Dart 侧的源/投影始终保留(它相对对象很小、且可秒级重建),
-///    `buildIndices` 即用它在 Rust 侧重建。
-///  - **[dispose] 两侧全销毁**:释放 Rust 索引 + 丢弃 Dart 侧数据引用,实例不可再用,需重建。
-abstract class _IndexedMatcher {
-  _IndexedMatcher(this.indexed, this.config);
+/// [fuzzy] also parses the query into space-separated terms and fzf-style
+/// operators (`!` negate, `^` prefix, `'` substring, `$` suffix) — so a
+/// multi-word query like `'lib parse'` is an AND of terms (this is what
+/// `perf/PERF.md` calls "word"). The other modes treat the whole query as one
+/// literal atom: [substring]/[prefix]/[postfix] match a contiguous run, [exact]
+/// matches the whole string.
+enum FfzMode { fuzzy, substring, prefix, postfix, exact }
 
-  /// 是否启用 Rust 侧常驻索引;false 则每次把整表传入 Rust。
-  final bool indexed;
+/// Case handling (mirrors `ffz_case_matching`).
+enum FfzCase { respect, ignore, smart }
 
-  /// 匹配配置(默认值;`ignoreCase`/`mode` 可在 match 时按查询覆盖)。
-  final FuzzyConfig config;
+/// Unicode normalization (mirrors `ffz_normalization`).
+enum FfzNorm { never, smart }
 
-  /// 按查询覆盖 `ignoreCase`/`mode`,无覆盖时复用构造配置(零分配)。
-  FuzzyConfig _cfg({bool? ignoreCase, MatchMode? mode}) =>
-      (ignoreCase == null && mode == null)
-          ? config
-          : config.copyWith(ignoreCase: ignoreCase, mode: mode);
+/// Which key produced a hit. Custom host kinds use values >= 100.
+enum FfzKeyKind { original, pinyin, initials, romaji, custom }
 
-  FuzzyCorpus? _corpus;
-  bool _disposed = false;
-  int _inFlight = 0;
-  bool _freeWhenIdle = false;
-  // 结构性变更(refresh/dispose)自增,用于丢弃过期的在飞异步结果。
-  int _generation = 0;
-  final List<Completer<void>> _idleWaiters = <Completer<void>>[];
+/// The raw C `ffz_key_kind` code for a kind (original=0..romaji=3, custom=100).
+extension FfzKeyKindCode on FfzKeyKind {
+  int get code => switch (this) {
+        FfzKeyKind.original => 0,
+        FfzKeyKind.pinyin => 1,
+        FfzKeyKind.initials => 2,
+        FfzKeyKind.romaji => 3,
+        FfzKeyKind.custom => 100,
+      };
+}
 
-  // —— 子类钩子 ——
-  /// 当前数据源对应的可搜索字符串(无数据返回 null)。始终保留,仅 dispose 时清。
-  List<String>? get _haystacks;
+/// An alternate search key for an item (e.g. host-computed pinyin/romaji), for
+/// [FfzCorpus.addKeyed]. [kind] is a [FfzKeyKind] code (use `FfzKeyKind.x.code`)
+/// or any host-defined value >= 100.
+class FfzKey {
+  final String text;
+  final int kind;
+  const FfzKey(this.text, {this.kind = 1 /* pinyin */});
+  FfzKey.kind(this.text, FfzKeyKind kind) : kind = kind.code;
+}
 
-  /// dispose 时清理 Dart 侧全部数据引用。
-  void _disposeData();
+FfzKeyKind _kindOf(int v) => switch (v) {
+      0 => FfzKeyKind.original,
+      1 => FfzKeyKind.pinyin,
+      2 => FfzKeyKind.initials,
+      3 => FfzKeyKind.romaji,
+      _ => FfzKeyKind.custom,
+    };
 
-  /// 索引建好后的钩子:Rust 已独占索引,子类可释放仅用于建索引的 Dart 侧投影缓存
-  /// (需要时再从源/对象重投影)。默认空操作。
-  void _onIndexBuilt() {}
+/// Thrown when the native library can't be loaded or a symbol is missing.
+class FfzException implements Exception {
+  final String message;
+  const FfzException(this.message);
+  @override
+  String toString() => 'FfzException: $message';
+}
 
-  /// 索引是否已建立(高速模式)。
-  bool get hasIndices => indexed && _corpus != null && !_freeWhenIdle;
+/// One search result. [index] is the item's insertion order; [indices] are the
+/// matched **codepoint** positions within the matched key — use
+/// [ffzCodepointToUtf16] before applying them to a Dart `String`.
+class FfzHit {
+  final int index;
+  final int score;
+  final FfzKeyKind matchedKind;
+  final int matchedKey; // which key of the item matched (0 == original)
+  final List<int> indices;
+  const FfzHit(
+      this.index, this.score, this.matchedKind, this.matchedKey, this.indices);
 
-  /// 是否已 dispose。
-  bool get isDisposed => _disposed;
+  @override
+  String toString() =>
+      'FfzHit(index: $index, score: $score, kind: $matchedKind)';
+}
 
-  /// 显式建立索引。索引已存在则直接跳过(幂等)。非索引模式为空操作。
-  /// 要求已 `await ffuzzy.ensureInitialized()`。
-  void buildIndices() {
-    _ensureAlive();
-    if (!indexed) return;
-    if (_corpus != null && !_freeWhenIdle) return; // 已存在 -> 跳过
-    final hs = _haystacks;
-    if (hs == null) {
-      throw StateError('无数据源,请先 refresh(source) 再 buildIndices()');
+/// Convert codepoint indices (as in [FfzHit.indices]) to UTF-16 code-unit
+/// offsets into [text], suitable for Dart `String`/`TextSpan` highlighting.
+/// (Dart strings are UTF-16; astral chars/emoji occupy two code units.)
+List<int> ffzCodepointToUtf16(String text, List<int> codepointIndices) {
+  if (codepointIndices.isEmpty) return const <int>[];
+  final offsets = <int>[];
+  var u16 = 0;
+  for (final r in text.runes) {
+    offsets.add(u16);
+    u16 += r > 0xFFFF ? 2 : 1;
+  }
+  return [
+    for (final c in codepointIndices)
+      (c >= 0 && c < offsets.length) ? offsets[c] : u16
+  ];
+}
+
+// ── native signatures ───────────────────────────────────────────────────────
+typedef _NewCfgN = Pointer<Void> Function(Int32, Int32);
+typedef _AddN = Void Function(Pointer<Void>, Pointer<Utf8>, Size);
+typedef _AddKeyedN = Void Function(Pointer<Void>, Pointer<Utf8>, Size,
+    Pointer<Pointer<Utf8>>, Pointer<Size>, Pointer<Int32>, Size);
+typedef _LenN = Size Function(Pointer<Void>);
+typedef _FreeN = Void Function(Pointer<Void>);
+typedef _VoidPtrN = Void Function(Pointer<Void>);
+typedef _FilterExN = Pointer<Void> Function(Pointer<Void>, Pointer<Utf8>, Size,
+    Int32, Int32, Int32, Int32, Int32, Size);
+typedef _RLenN = Size Function(Pointer<Void>);
+typedef _RU32N = Uint32 Function(Pointer<Void>, Size);
+typedef _RI32N = Int32 Function(Pointer<Void>, Size);
+typedef _RNIdxN = Size Function(Pointer<Void>, Size);
+typedef _RIdxN = Uint32 Function(Pointer<Void>, Size, Size);
+
+class _Lib {
+  _Lib(this.lib)
+      : newCfg = lib.lookupFunction<_NewCfgN, Pointer<Void> Function(int, int)>(
+            'ffz_ffi_new_cfg'),
+        add = lib.lookupFunction<_AddN,
+            void Function(Pointer<Void>, Pointer<Utf8>, int)>('ffz_ffi_add'),
+        len = lib
+            .lookupFunction<_LenN, int Function(Pointer<Void>)>('ffz_ffi_len'),
+        clear = lib.lookupFunction<_VoidPtrN, void Function(Pointer<Void>)>(
+            'ffz_ffi_clear'),
+        filterEx = lib.lookupFunction<
+            _FilterExN,
+            Pointer<Void> Function(Pointer<Void>, Pointer<Utf8>, int, int, int,
+                int, int, int, int)>('ffz_ffi_filter_ex'),
+        rLen = lib.lookupFunction<_RLenN, int Function(Pointer<Void>)>(
+            'ffz_ffi_results_len'),
+        rItem = lib.lookupFunction<_RU32N, int Function(Pointer<Void>, int)>(
+            'ffz_ffi_results_item'),
+        rScore = lib.lookupFunction<_RI32N, int Function(Pointer<Void>, int)>(
+            'ffz_ffi_results_score'),
+        rKind = lib.lookupFunction<_RI32N, int Function(Pointer<Void>, int)>(
+            'ffz_ffi_results_kind'),
+        rKey = lib.lookupFunction<_RU32N, int Function(Pointer<Void>, int)>(
+            'ffz_ffi_results_key'),
+        rNIdx = lib.lookupFunction<_RNIdxN, int Function(Pointer<Void>, int)>(
+            'ffz_ffi_results_nindices'),
+        rIdx =
+            lib.lookupFunction<_RIdxN, int Function(Pointer<Void>, int, int)>(
+                'ffz_ffi_results_index'),
+        rFree = lib.lookupFunction<_VoidPtrN, void Function(Pointer<Void>)>(
+            'ffz_ffi_results_free'),
+        free = lib.lookupFunction<_FreeN, void Function(Pointer<Void>)>(
+            'ffz_ffi_free'),
+        installCrash = _lookupCrash(lib),
+        addKeyed = _lookupAddKeyed(lib),
+        finalizer = NativeFinalizer(
+            lib.lookup<NativeFunction<_FreeN>>('ffz_ffi_free').cast());
+
+  // Tolerant: a custom libraryPath might predate the crash-handler export.
+  static int Function(Pointer<Utf8>)? _lookupCrash(DynamicLibrary lib) {
+    try {
+      return lib.lookupFunction<Int32 Function(Pointer<Utf8>),
+          int Function(Pointer<Utf8>)>('ffz_ffi_install_crash_handler');
+    } catch (_) {
+      return null;
     }
-    _freeWhenIdle = false;
-    _corpus = FuzzyCorpus(items: hs);
-    _onIndexBuilt();
   }
 
-  /// [buildIndices] 的异步版本:Utf32 转换在 frb worker 线程执行,**不阻塞 UI**,适合大数据集。
-  /// 已存在索引则跳过(幂等)。构建期间发生 [refresh]/[dispose] 会丢弃本次结果。
-  /// 注:`FuzzyMatcher<T>` 的投影(stringOf)仍在调用线程算;此方法异步的是 Rust 侧的索引构建。
-  Future<void> buildIndicesAsync() async {
-    _ensureAlive();
-    if (!indexed) return;
-    if (_corpus != null && !_freeWhenIdle) return; // 已存在 -> 跳过
-    final hs = _haystacks;
-    if (hs == null) {
-      throw StateError('无数据源,请先 refresh(source) 再 buildIndicesAsync()');
+  // Tolerant: a custom libraryPath might predate the keyed-add export.
+  static void Function(
+      Pointer<Void>,
+      Pointer<Utf8>,
+      int,
+      Pointer<Pointer<Utf8>>,
+      Pointer<Size>,
+      Pointer<Int32>,
+      int)? _lookupAddKeyed(DynamicLibrary lib) {
+    try {
+      return lib.lookupFunction<
+          _AddKeyedN,
+          void Function(
+              Pointer<Void>,
+              Pointer<Utf8>,
+              int,
+              Pointer<Pointer<Utf8>>,
+              Pointer<Size>,
+              Pointer<Int32>,
+              int)>('ffz_ffi_add_keyed');
+    } catch (_) {
+      return null;
     }
-    final gen = _generation; // 发起时的版本
-    await ffuzzy.ensureInitialized();
-    if (_disposed || gen != _generation) return; // 期间被 dispose/refresh -> 放弃
-    final corpus =
-        await fuzzyCorpusNewAsync(items: hs);
-    if (_disposed || gen != _generation) {
-      corpus.dispose(); // 已过期,弃用刚建好的索引
+  }
+
+  final DynamicLibrary lib;
+  final Pointer<Void> Function(int, int) newCfg;
+  final void Function(Pointer<Void>, Pointer<Utf8>, int) add;
+  final int Function(Pointer<Void>) len;
+  final void Function(Pointer<Void>) clear;
+  final Pointer<Void> Function(
+      Pointer<Void>, Pointer<Utf8>, int, int, int, int, int, int, int) filterEx;
+  final int Function(Pointer<Void>) rLen;
+  final int Function(Pointer<Void>, int) rItem;
+  final int Function(Pointer<Void>, int) rScore;
+  final int Function(Pointer<Void>, int) rKind;
+  final int Function(Pointer<Void>, int) rKey;
+  final int Function(Pointer<Void>, int) rNIdx;
+  final int Function(Pointer<Void>, int, int) rIdx;
+  final void Function(Pointer<Void>) rFree;
+  final void Function(Pointer<Void>) free;
+  final int Function(Pointer<Utf8>)? installCrash;
+  final void Function(Pointer<Void>, Pointer<Utf8>, int, Pointer<Pointer<Utf8>>,
+      Pointer<Size>, Pointer<Int32>, int)? addKeyed;
+  final NativeFinalizer finalizer;
+
+  static final Map<String, _Lib> _cache = {};
+  static _Lib resolve(String? path) =>
+      _cache.putIfAbsent(path ?? '<default>', () => _Lib(_open(path)));
+
+  static DynamicLibrary _open(String? path) {
+    try {
+      if (path != null) return DynamicLibrary.open(path);
+      if (Platform.isWindows) return DynamicLibrary.open('ffz.dll');
+      // iOS and macOS both static-link the sources via the podspec, so the
+      // symbols live in the host process image.
+      if (Platform.isIOS || Platform.isMacOS) return DynamicLibrary.process();
+      return DynamicLibrary.open('libffz.so');
+    } on ArgumentError catch (e) {
+      throw FfzException('failed to load ffz native library: $e');
+    }
+  }
+}
+
+// Marshal a Dart string as UTF-8 into native memory WITHOUT relying on a NUL
+// terminator (so embedded U+0000 is preserved). Caller frees via malloc.free.
+extension on String {
+  ({Pointer<Utf8> ptr, int len}) _toUtf8() {
+    final bytes = utf8.encode(this);
+    final p = malloc<Uint8>(bytes.isEmpty ? 1 : bytes.length);
+    if (bytes.isNotEmpty) p.asTypedList(bytes.length).setAll(0, bytes);
+    return (ptr: p.cast<Utf8>(), len: bytes.length);
+  }
+}
+
+/// A resident corpus of items that can be fuzzy/substring/prefix/etc. filtered.
+/// Release with [dispose], or rely on the [NativeFinalizer] on GC.
+class FfzCorpus implements Finalizable {
+  /// [matchPaths] tunes delimiters for path-like text; [preferPrefix] biases
+  /// scoring toward matches near the start. [libraryPath] loads a specific
+  /// native library file (tests / non-bundled use).
+  FfzCorpus(
+      {bool matchPaths = false, bool preferPrefix = false, String? libraryPath})
+      : _l = _Lib.resolve(libraryPath),
+        _libPath = libraryPath {
+    _ptr = _l.newCfg(matchPaths ? 1 : 0, preferPrefix ? 1 : 0);
+    if (_ptr == nullptr) {
+      throw const FfzException('ffz_ffi_new_cfg returned null');
+    }
+    _l.finalizer.attach(this, _ptr.cast(), detach: this);
+  }
+
+  final _Lib _l;
+  final String? _libPath; // remembered so filterAsync can reopen on a worker
+  late final Pointer<Void> _ptr;
+  bool _disposed = false;
+  int _inFlight = 0; // pending filterAsync calls reading the native corpus
+
+  void _check() {
+    if (_disposed) throw StateError('FfzCorpus used after dispose()');
+  }
+
+  // Mutating/freeing the corpus while a filterAsync reads it from a worker
+  // isolate would be a native use-after-free; refuse with a catchable error.
+  void _checkMutate() {
+    _check();
+    if (_inFlight > 0) {
+      throw StateError(
+          'FfzCorpus mutated while $_inFlight filterAsync call(s) in flight');
+    }
+  }
+
+  void add(String item) {
+    _checkMutate();
+    final u = item._toUtf8();
+    _l.add(_ptr, u.ptr, u.len);
+    malloc.free(u.ptr);
+  }
+
+  void addAll(Iterable<String> items) {
+    _check();
+    for (final s in items) {
+      add(s);
+    }
+  }
+
+  /// Add [item] with explicit alternate search [keys] — e.g. host-computed
+  /// pinyin/romaji/initials, so a CJK item is findable by typing latin. The
+  /// ORIGINAL key (the item text) is added automatically. A hit reports which
+  /// key matched via [FfzHit.matchedKind]/[FfzHit.matchedKey].
+  /// ```dart
+  /// corpus.addKeyed('张三', [
+  ///   FfzKey.kind('zhangsan', FfzKeyKind.pinyin),
+  ///   FfzKey.kind('zs', FfzKeyKind.initials),
+  /// ]);
+  /// ```
+  void addKeyed(String item, List<FfzKey> keys) {
+    _checkMutate();
+    final f = _l.addKeyed;
+    if (f == null) {
+      throw const FfzException('ffz_ffi_add_keyed missing in native library');
+    }
+    final iu = item._toUtf8();
+    final n = keys.length;
+    if (n == 0) {
+      _l.add(_ptr, iu.ptr, iu.len);
+      malloc.free(iu.ptr);
       return;
     }
-    _freeWhenIdle = false;
-    _corpus = corpus;
-    _onIndexBuilt();
-  }
-
-  /// 只释放 Rust 侧索引(Dart 侧源/投影保留,`buildIndices` 可秒级重建)。
-  /// 释放后 `match` 退化为整表扫描。有在飞异步搜索时,推迟到其排空后再释放。
-  /// 幂等。仅 `indexed=true` 生效。要连 Dart 侧数据一起释放请用 [dispose]。
-  void freeIndices() {
-    if (_disposed || !indexed) return;
-    if (_inFlight == 0) {
-      _releaseCorpus();
-    } else {
-      _freeWhenIdle = true;
+    final texts = malloc<Pointer<Utf8>>(n);
+    final lens = malloc<Size>(n);
+    final kinds = malloc<Int32>(n);
+    final keyPtrs = <Pointer<Utf8>>[];
+    try {
+      for (var i = 0; i < n; i++) {
+        final ku = keys[i].text._toUtf8();
+        texts[i] = ku.ptr;
+        lens[i] = ku.len;
+        kinds[i] = keys[i].kind;
+        keyPtrs.add(ku.ptr);
+      }
+      f(_ptr, iu.ptr, iu.len, texts, lens, kinds, n);
+    } finally {
+      for (final p in keyPtrs) {
+        malloc.free(p);
+      }
+      malloc.free(texts);
+      malloc.free(lens);
+      malloc.free(kinds);
+      malloc.free(iu.ptr);
     }
   }
 
-  /// 彻底销毁:释放 Rust 索引 + 丢弃 Dart 侧数据。实例不可再用,需重建。
-  /// 有在飞搜索则排空后再释放。幂等。
+  int get length {
+    _check();
+    return _l.len(_ptr);
+  }
+
+  /// Remove all items (the corpus stays usable).
+  void clear() {
+    _checkMutate();
+    _l.clear(_ptr);
+  }
+
+  /// Filter the corpus.
+  ///
+  /// [parallel]/[threads]: multi-threaded scoring (`threads:0` = auto, half the
+  /// CPUs capped at 8; a hard ceiling of cpu-1 always applies; corpora < 512
+  /// items run single-threaded). [limit] == 0 returns all matches.
+  /// [highlight] false skips reading match indices.
+  List<FfzHit> filter(
+    String query, {
+    FfzMode mode = FfzMode.fuzzy,
+    FfzCase caseMatching = FfzCase.smart,
+    FfzNorm normalization = FfzNorm.smart,
+    bool parallel = false,
+    int threads = 0,
+    int limit = 0,
+    bool highlight = true,
+  }) {
+    _check();
+    return _filterWith(_l, _ptr, query, mode.index, caseMatching.index,
+        normalization.index, parallel ? 1 : 0, threads, limit, highlight);
+  }
+
+  /// Like [filter] but runs the native scan + result marshaling on a background
+  /// isolate, so a large corpus never janks the UI isolate. Combine with
+  /// `parallel: true` to also fan the C scan across threads. Multiple
+  /// `filterAsync` calls may overlap safely (each gets its own native matcher).
+  ///
+  /// The corpus's native memory is process-global, so the worker reads it
+  /// directly. While a `filterAsync` is in flight, [add]/[addKeyed]/[clear]/
+  /// [dispose] throw [StateError] (mutating it would be a native
+  /// use-after-free). Awaiting the returned future also keeps this corpus alive
+  /// across the call, so the finalizer can't free it mid-scan — but do keep a
+  /// reference and don't drop the future if you rely on that.
+  Future<List<FfzHit>> filterAsync(
+    String query, {
+    FfzMode mode = FfzMode.fuzzy,
+    FfzCase caseMatching = FfzCase.smart,
+    FfzNorm normalization = FfzNorm.smart,
+    bool parallel = false,
+    int threads = 0,
+    int limit = 0,
+    bool highlight = true,
+  }) async {
+    _check();
+    final addr = _ptr.address;
+    final libPath = _libPath;
+    final m = mode.index, cmI = caseMatching.index, nmI = normalization.index;
+    final par = parallel ? 1 : 0;
+    _inFlight++;
+    try {
+      return await Isolate.run(() {
+        // New isolate: statics are fresh, so reopen the library (the OS returns
+        // the already-loaded image) and address the shared corpus by pointer.
+        final lib = _Lib.resolve(libPath);
+        return _filterWith(lib, Pointer<Void>.fromAddress(addr), query, m, cmI,
+            nmI, par, threads, limit, highlight);
+      });
+    } finally {
+      // Touching the instance field after the await keeps `this` (and thus the
+      // native corpus) reachable for the whole call, defeating the finalizer.
+      _inFlight--;
+    }
+  }
+
+  // Shared native call + result read, usable on any isolate (the FfzHit list it
+  // returns is sendable). `ptr` must be a live corpus in this process.
+  static List<FfzHit> _filterWith(
+      _Lib lib,
+      Pointer<Void> ptr,
+      String query,
+      int mode,
+      int cm,
+      int nm,
+      int par,
+      int threads,
+      int limit,
+      bool highlight) {
+    final u = query._toUtf8();
+    final r =
+        lib.filterEx(ptr, u.ptr, u.len, mode, cm, nm, par, threads, limit);
+    malloc.free(u.ptr);
+    if (r == nullptr) throw const FfzException('filter failed (out of memory)');
+    final n = lib.rLen(r);
+    final out = <FfzHit>[];
+    for (var i = 0; i < n; i++) {
+      List<int> idx = const [];
+      if (highlight) {
+        final ni = lib.rNIdx(r, i);
+        idx = List<int>.generate(ni, (j) => lib.rIdx(r, i, j), growable: false);
+      }
+      out.add(FfzHit(lib.rItem(r, i), lib.rScore(r, i),
+          _kindOf(lib.rKind(r, i)), lib.rKey(r, i), idx));
+    }
+    lib.rFree(r);
+    return out;
+  }
+
+  /// Release native memory now. Idempotent. Throws [StateError] if a
+  /// [filterAsync] is still in flight (freeing would be a use-after-free) —
+  /// await the pending futures first.
   void dispose() {
     if (_disposed) return;
+    if (_inFlight > 0) {
+      throw StateError(
+          'FfzCorpus.dispose() with $_inFlight filterAsync call(s) in flight');
+    }
     _disposed = true;
-    _generation++; // 丢弃在飞搜索结果
-    if (_inFlight == 0) {
-      _releaseCorpus();
-      _disposeData();
-    }
+    _l.finalizer.detach(this);
+    _l.free(_ptr);
   }
+}
 
-  /// 同 [dispose],但 Future 在「在飞搜索排空且资源已释放」后才完成。
-  Future<void> disposeAndWait() {
-    dispose();
-    if (_inFlight == 0) return Future<void>.value();
-    final completer = Completer<void>();
-    _idleWaiters.add(completer);
-    return completer.future;
-  }
+/// Optional native crash handler for **non-recoverable** faults.
+///
+/// Recoverable errors already surface as [FfzException]/[StateError] and are
+/// catchable. A genuine native fault (segfault / abort) cannot be turned into a
+/// Dart exception — `dart:ffi` has no such mechanism and the process dies.
+/// Installing this handler makes that death *diagnosable*: it prints a
+/// backtrace to stderr (logcat on Android) just before exit and, if you pass a
+/// [breadcrumbPath], writes the same report to that file so you can show
+/// "last crash" on the next launch via [lastReport].
+///
+/// How readable the backtrace is depends on the **build**, automatically:
+/// debug/profile libraries keep symbols, so you get function names (and, on
+/// Windows, `file:line` from the PDB); stripped release libraries print address
+/// offsets you symbolize offline with the shipped `.debug`/`.pdb`/`.dSYM`.
+///
+/// This is opt-in (it installs process-wide signal handlers; call it once at
+/// startup, before your other crash reporter if you chain them):
+/// ```dart
+/// final report = FfzCrash.lastReport();      // previous run's crash, if any
+/// if (report != null) log('ffz last crash:\n$report');
+/// FfzCrash.install(breadcrumbPath: '${dir.path}/ffz_crash.log');
+/// ```
+class FfzCrash {
+  FfzCrash._();
+  static String? _path;
 
-  bool _warnedScan = false;
-
-  /// indexed 模式下走了退化扫描(忘了 buildIndices / 已 free),debug 下每实例提醒一次。
-  void _warnScanFallback() {
-    if (indexed && kDebugMode && !_warnedScan) {
-      _warnedScan = true;
-      debugPrint('[ffuzzy] 提示:索引未建立,本次为慢速整表扫描。'
-          '调用 buildIndices() 进入高速模式。');
-    }
-  }
-
-  List<FuzzyHit> _rawMatch(String query, int? limit, [FuzzyConfig? cfgOverride]) {
-    _ensureAlive();
-    _checkLimit(limit);
-    if (!ffuzzy.isInitialized) {
-      throw StateError('ffuzzy 尚未初始化完成,同步方法前请先 `await ffuzzy.ensureInitialized()`');
-    }
-    final cfg = cfgOverride ?? config;
-    final hs = _haystacks;
-    if (hs == null) {
-      throw StateError('无数据源,请先 refresh(source)');
-    }
-    // 有索引走索引(快);无索引(未建/已 freeIndices/indexed=false)退化为整表扫描
-    // (慢,但不分配持久索引、绝不自动重建)。
-    if (_corpus != null) {
-      return _corpus!.filter(query: query, config: cfg, limit: limit);
-    }
-    _warnScanFallback();
-    return fuzzyFilter(query: query, items: hs, config: cfg, limit: limit);
-  }
-
-  Future<List<FuzzyHit>> _rawMatchAsync(String query, int? limit,
-      [FuzzyConfig? cfgOverride]) async {
-    _ensureAlive();
-    _checkLimit(limit);
-    final cfg = cfgOverride ?? config;
-    final gen = _generation; // 发起时的版本
-    _inFlight++; // 同步占位，确保紧随的 dispose/free 能感知到在飞搜索
+  /// Install the handler. [breadcrumbPath] (optional) receives the backtrace of
+  /// the next crash. [libraryPath] mirrors [FfzCorpus]. Returns true if the
+  /// native handler was installed (false if the library lacks the symbol).
+  static bool install({String? breadcrumbPath, String? libraryPath}) {
+    final f = _Lib.resolve(libraryPath).installCrash;
+    if (f == null) return false;
+    _path = breadcrumbPath;
+    // NUL-terminated (C uses strlen); a file path never has an embedded NUL.
+    final p = breadcrumbPath == null ? nullptr : breadcrumbPath.toNativeUtf8();
     try {
-      await ffuzzy.ensureInitialized();
-      final hs = _haystacks;
-      // 期间发生 refresh/dispose(版本变化或数据已清)→ 丢弃,等同终止旧任务。
-      if (gen != _generation || hs == null) return const <FuzzyHit>[];
-      final List<FuzzyHit> result;
-      if (_corpus != null) {
-        result = await _corpus!.filterAsync(query: query, config: cfg, limit: limit);
-      } else {
-        _warnScanFallback();
-        result = await fuzzyFilterAsync(
-          query: query,
-          items: hs,
-          config: cfg,
-          limit: limit,
-        );
-      }
-      // 搜索期间若 refresh/dispose,结果已过期 → 丢弃,避免错位/越界/崩溃。
-      if (gen != _generation) return const <FuzzyHit>[];
-      return result;
+      return f(p.cast()) != 0;
     } finally {
-      _inFlight--;
-      if (_inFlight == 0) _onIdle();
+      if (p != nullptr) malloc.free(p);
     }
   }
 
-  /// refresh 用:替换数据源后重建索引。
-  void _rebuildCorpus() {
-    _generation++; // 数据已换,丢弃在飞旧结果
-    if (!indexed) return;
-    final hs = _haystacks;
-    if (hs == null) return;
-    if (_inFlight == 0) {
-      _corpus?.dispose(); // 无在飞搜索才显式释放旧索引
-    }
-    // 有在飞搜索时,旧 corpus 由 Rust Arc 持有至其结束、之后 GC 回收;这里直接换新引用。
-    _corpus = FuzzyCorpus(items: hs);
-    _freeWhenIdle = false;
-    _onIndexBuilt();
+  /// Read (and clear) the crash report left by a previous run, or null if none.
+  /// Pass the same [breadcrumbPath] used at [install], or rely on the stored one.
+  static String? lastReport({String? breadcrumbPath}) {
+    final p = breadcrumbPath ?? _path;
+    if (p == null) return null;
+    final f = File(p);
+    if (!f.existsSync()) return null;
+    final s = f.readAsStringSync();
+    try {
+      f.deleteSync();
+    } catch (_) {}
+    return s.isEmpty ? null : s;
   }
-
-  void _onIdle() {
-    if (_disposed) {
-      _releaseCorpus();
-      _disposeData();
-    } else if (_freeWhenIdle) {
-      _releaseCorpus();
-      _freeWhenIdle = false;
-    }
-    for (final w in _idleWaiters) {
-      if (!w.isCompleted) w.complete();
-    }
-    _idleWaiters.clear();
-  }
-
-  /// 把新投影串增量追加到已建索引(无索引时为空操作,数据已在 Dart 源里,下次 build 生效)。
-  void _appendToIndex(List<String> haystacks) {
-    if (haystacks.isEmpty) return;
-    if (_corpus != null) _corpus!.add(items: haystacks);
-  }
-
-  void _corpusClear() => _corpus?.clear();
-  void _corpusSetAt(int index, String haystack) =>
-      _corpus?.setAt(index: index, item: haystack);
-  void _corpusRemoveIndices(List<int> indices) {
-    if (_corpus != null && indices.isNotEmpty) {
-      _corpus!.removeIndices(indices: indices);
-    }
-  }
-
-  void _releaseCorpus() {
-    _corpus?.dispose();
-    _corpus = null;
-  }
-
-  void _ensureAlive() {
-    if (_disposed) {
-      throw StateError('该匹配器已被 dispose,不能再使用');
-    }
-  }
-}
-
-/// 字符串模糊搜索器:面向 `List<String>`,`match` 返回带原列表下标的 [FuzzyHit]。
-class FuzzyStringMatcher extends _IndexedMatcher {
-  /// [indexed] 是否启用常驻索引(默认 true);false 则每次把整表传入 Rust。
-  FuzzyStringMatcher(
-    List<String> items, {
-    bool indexed = true,
-    FuzzyConfig config = kDefaultFuzzyConfig,
-  })  : _src = List<String>.of(items), // 可增长,支持 add
-        super(indexed, config);
-
-  List<String>? _src;
-
-  @override
-  List<String>? get _haystacks => _src;
-
-  @override
-  void _disposeData() => _src = null;
-
-  /// 候选集(只读视图)。
-  List<String> get items =>
-      _src == null ? const <String>[] : UnmodifiableListView(_src!);
-
-  /// 增量追加一条;若已建索引,直接追加到 Rust 索引(不重建)。
-  void add(String item) => addAll(<String>[item]);
-
-  /// 增量追加多条。已 dispose 抛错。
-  void addAll(Iterable<String> items) {
-    _ensureAlive();
-    final list = items.toList();
-    if (list.isEmpty) return;
-    _src!.addAll(list);
-    _appendToIndex(list);
-  }
-
-  /// 改:替换下标 [index] 处的候选。会丢弃在飞结果(内容已变)。
-  void update(int index, String item) {
-    _ensureAlive();
-    RangeError.checkValidIndex(index, _src!);
-    _generation++;
-    _src![index] = item;
-    _corpusSetAt(index, item);
-  }
-
-  /// 删:移除下标 [index] 处的候选(后续下标前移)。会丢弃在飞结果。
-  void removeAt(int index) {
-    _ensureAlive();
-    RangeError.checkValidIndex(index, _src!);
-    _generation++;
-    _src!.removeAt(index);
-    _corpusRemoveIndices(<int>[index]);
-  }
-
-  /// 删:按条件批量移除。会丢弃在飞结果。返回移除条数。
-  int removeWhere(bool Function(String item) test) {
-    _ensureAlive();
-    final idx = <int>[for (var i = 0; i < _src!.length; i++) if (test(_src![i])) i];
-    if (idx.isEmpty) return 0;
-    _generation++;
-    for (var k = idx.length - 1; k >= 0; k--) {
-      _src!.removeAt(idx[k]);
-    }
-    _corpusRemoveIndices(idx);
-    return idx.length;
-  }
-
-  /// 清空全部候选(实例保留,可继续 add/refresh)。
-  void clear() {
-    _ensureAlive();
-    _generation++;
-    _src!.clear();
-    _corpusClear();
-  }
-
-  /// 候选数量。
-  int get length => _src?.length ?? 0;
-
-  /// 同步搜索。无索引时退化为整表扫描(慢);用 [buildIndices] 加速。
-  /// [ignoreCase]/[mode] 可按本次查询覆盖构造时的配置。
-  List<FuzzyHit> match(String query,
-          {int? limit, bool? ignoreCase, MatchMode? mode}) =>
-      _rawMatch(query, limit, _cfg(ignoreCase: ignoreCase, mode: mode));
-
-  /// 异步搜索:后台线程执行,不阻塞 UI。
-  Future<List<FuzzyHit>> matchAsync(String query,
-          {int? limit, bool? ignoreCase, MatchMode? mode}) =>
-      _rawMatchAsync(query, limit, _cfg(ignoreCase: ignoreCase, mode: mode));
-
-  /// 取最佳一条(与 [match] 元素类型一致):无命中返回 `null`。
-  FuzzyHit? single(String query, {bool? ignoreCase, MatchMode? mode}) {
-    final r = match(query, limit: 1, ignoreCase: ignoreCase, mode: mode);
-    return r.isEmpty ? null : r.first;
-  }
-
-  /// [single] 的异步版本。
-  Future<FuzzyHit?> singleAsync(String query,
-      {bool? ignoreCase, MatchMode? mode}) async {
-    final r = await matchAsync(query, limit: 1, ignoreCase: ignoreCase, mode: mode);
-    return r.isEmpty ? null : r.first;
-  }
-
-  /// 替换数据源并**自动重建索引**(适合「先占位空列表、数据回来后再喂入」)。
-  void refresh(List<String> source) {
-    _ensureAlive();
-    _src = List<String>.unmodifiable(source);
-    _rebuildCorpus();
-  }
-}
-
-/// 泛型模糊搜索器:对任意类型 [T] 建索引,`match` 直接返回命中的**对象**([FuzzyOutput])。
-class FuzzyMatcher<T> extends _IndexedMatcher {
-  /// [stringOf] 把每个元素投影成「用于索引的可搜索串」(搜字符串列表用 `(s) => s`,
-  /// 多字段用 `(g) => '${g.a} ${g.b}'`);[indexed] 是否启用常驻索引(默认 true);[config] 匹配配置。
-  FuzzyMatcher(
-    List<T> items,
-    String Function(T) stringOf, {
-    bool indexed = true,
-    FuzzyConfig config = kDefaultFuzzyConfig,
-  })  : _objs = List<T>.of(items), // 可增长,支持 add
-        _stringOf = stringOf,
-        super(indexed, config);
-
-  /// 便捷构造:候选为 `Map` 且按字段名 [key] 搜索(如 `'gameName'`)。
-  static FuzzyMatcher<Map<String, dynamic>> key(
-    List<Map<String, dynamic>> items,
-    String key, {
-    bool indexed = true,
-    FuzzyConfig config = kDefaultFuzzyConfig,
-  }) =>
-      FuzzyMatcher<Map<String, dynamic>>(
-        items,
-        (m) => (m[key] as String?) ?? '',
-        indexed: indexed,
-        config: config,
-      );
-
-  List<T>? _objs;
-  final String Function(T) _stringOf;
-  List<String>? _projected; // Dart 侧派生索引缓存
-
-  @override
-  List<String>? get _haystacks {
-    final objs = _objs;
-    if (objs == null) return null;
-    return _projected ??= <String>[for (final o in objs) _stringOf(o)];
-  }
-
-  // 投影缓存仅在「未建索引」时存活;建好索引后由 Rust 独占,Dart 侧释放(见 _onIndexBuilt)。
-  @override
-  void _disposeData() {
-    _objs = null;
-    _projected = null;
-  }
-
-  // C: 索引建好后释放 Dart 侧投影缓存(Rust 已独占)。需要时(fallback/重建)由 _haystacks
-  // 从对象重新投影。对象 _objs 始终保留(结果 index->对象 映射、refresh 都要它)。
-  @override
-  void _onIndexBuilt() => _projected = null;
-
-  /// 候选数量。
-  int get length => _objs?.length ?? 0;
-
-  /// 增量追加一条对象;若已建索引,投影后直接追加到 Rust 索引(不重建)。
-  void add(T item) => addAll(<T>[item]);
-
-  /// 增量追加多条对象。已 dispose 抛错。
-  void addAll(Iterable<T> items) {
-    _ensureAlive();
-    final list = items.toList();
-    if (list.isEmpty) return;
-    final newHaystacks = <String>[for (final o in list) _stringOf(o)];
-    _objs!.addAll(list);
-    _projected?.addAll(newHaystacks); // 保持投影缓存与对象同步
-    _appendToIndex(newHaystacks);
-  }
-
-  /// 改:替换下标 [index] 处的对象(重新投影该条)。会丢弃在飞结果。
-  void update(int index, T item) {
-    _ensureAlive();
-    RangeError.checkValidIndex(index, _objs!);
-    _generation++;
-    _objs![index] = item;
-    final s = _stringOf(item);
-    if (_projected != null) _projected![index] = s;
-    _corpusSetAt(index, s);
-  }
-
-  /// 删:移除下标 [index] 处的对象(后续下标前移)。会丢弃在飞结果。
-  void removeAt(int index) {
-    _ensureAlive();
-    RangeError.checkValidIndex(index, _objs!);
-    _generation++;
-    _objs!.removeAt(index);
-    _projected?.removeAt(index);
-    _corpusRemoveIndices(<int>[index]);
-  }
-
-  /// 删:按条件批量移除。会丢弃在飞结果。返回移除条数。
-  int removeWhere(bool Function(T item) test) {
-    _ensureAlive();
-    final idx = <int>[for (var i = 0; i < _objs!.length; i++) if (test(_objs![i])) i];
-    if (idx.isEmpty) return 0;
-    _generation++;
-    for (var k = idx.length - 1; k >= 0; k--) {
-      _objs!.removeAt(idx[k]);
-      _projected?.removeAt(idx[k]);
-    }
-    _corpusRemoveIndices(idx);
-    return idx.length;
-  }
-
-  /// 清空全部候选(实例保留,可继续 add/refresh)。
-  void clear() {
-    _ensureAlive();
-    _generation++;
-    _objs!.clear();
-    _projected?.clear();
-    _corpusClear();
-  }
-
-  /// 同步搜索,返回命中对象。无索引时退化为整表扫描(慢);用 [buildIndices] 加速。
-  /// [ignoreCase]/[mode] 可按本次查询覆盖构造时的配置。
-  List<FuzzyOutput<T>> match(String query,
-          {int? limit, bool? ignoreCase, MatchMode? mode}) =>
-      _project(_rawMatch(query, limit, _cfg(ignoreCase: ignoreCase, mode: mode)));
-
-  /// 异步搜索:后台线程执行,不阻塞 UI。
-  /// 若搜索期间发生 [refresh]/[dispose],本次结果会被丢弃(返回空),由调用方按新状态重查。
-  Future<List<FuzzyOutput<T>>> matchAsync(String query,
-          {int? limit, bool? ignoreCase, MatchMode? mode}) async =>
-      _project(await _rawMatchAsync(
-          query, limit, _cfg(ignoreCase: ignoreCase, mode: mode)));
-
-  /// 取最佳一条(与 [match] 元素类型一致,`FuzzyOutput<T>`):无命中返回 `null`。
-  /// 命中对象用 `single(q)?.obj` 取。
-  FuzzyOutput<T>? single(String query, {bool? ignoreCase, MatchMode? mode}) {
-    final r = match(query, limit: 1, ignoreCase: ignoreCase, mode: mode);
-    return r.isEmpty ? null : r.first;
-  }
-
-  /// [single] 的异步版本。
-  Future<FuzzyOutput<T>?> singleAsync(String query,
-      {bool? ignoreCase, MatchMode? mode}) async {
-    final r = await matchAsync(query, limit: 1, ignoreCase: ignoreCase, mode: mode);
-    return r.isEmpty ? null : r.first;
-  }
-
-  /// 替换数据源并**自动重建索引**(适合「先占位空列表、数据回来后再喂入」)。
-  void refresh(List<T> source) {
-    _ensureAlive();
-    _objs = List<T>.unmodifiable(source);
-    _projected = null;
-    _rebuildCorpus();
-  }
-
-  List<FuzzyOutput<T>> _project(List<FuzzyHit> hits) {
-    final objs = _objs;
-    if (objs == null) return const []; // 已 dispose,兜底
-    return <FuzzyOutput<T>>[
-      for (final h in hits)
-        if (h.index >= 0 && h.index < objs.length)
-          FuzzyOutput<T>(objs[h.index], h.score, h.indices),
-    ];
-  }
-}
-
-/// 在默认/现有配置基础上改少量字段,避免每次写全三个字段。
-extension FuzzyConfigCopyWith on FuzzyConfig {
-  FuzzyConfig copyWith({
-    bool? ignoreCase,
-    bool? normalize,
-    bool? preferPrefix,
-    MatchMode? mode,
-    bool? parallel,
-    bool? incremental,
-  }) =>
-      FuzzyConfig(
-        ignoreCase: ignoreCase ?? this.ignoreCase,
-        normalize: normalize ?? this.normalize,
-        preferPrefix: preferPrefix ?? this.preferPrefix,
-        mode: mode ?? this.mode,
-        parallel: parallel ?? this.parallel,
-        incremental: incremental ?? this.incremental,
-      );
 }

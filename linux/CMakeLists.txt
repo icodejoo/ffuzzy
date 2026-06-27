@@ -1,19 +1,7 @@
-# The Flutter tooling requires that developers have CMake 3.10 or later
-# installed. You should not increase this version, as doing so will cause
-# the plugin to fail to compile for some customers of the plugin.
-cmake_minimum_required(VERSION 3.10)
+# Flutter Linux FFI-plugin native build. Builds libffz.so and bundles it.
+cmake_minimum_required(VERSION 3.14)
+project(ffz_library LANGUAGES C)
 
-# Project-level configuration.
-set(PROJECT_NAME "ffuzzy")
-project(${PROJECT_NAME} LANGUAGES CXX)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/.." ffz_native)
 
-include("../cargokit/cmake/cargokit.cmake")
-apply_cargokit(${PROJECT_NAME} ../rust rust_lib_ffuzzy "")
-
-# List of absolute paths to libraries that should be bundled with the plugin.
-# This list could contain prebuilt libraries, or libraries created by an
-# external build triggered from this build file.
-set(ffuzzy_bundled_libraries
-  "${${PROJECT_NAME}_cargokit_lib}"
-  PARENT_SCOPE
-)
+set(ffuzzy_bundled_libraries "$<TARGET_FILE:ffz>" PARENT_SCOPE)

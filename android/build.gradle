@@ -1,129 +1,36 @@
-group 'com.flutter_rust_bridge.rust_lib_ffuzzy'
-version '1.0'
+// Flutter Android FFI-plugin native build: compiles the C sources via CMake
+// for each ABI (arm64-v8a, armeabi-v7a, x86_64, x86) and bundles libffz.so.
+group 'dev.ffz'
+version '0.3.0'
 
 buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:7.3.0'
-    }
+    repositories { google(); mavenCentral() }
+    dependencies { classpath 'com.android.tools.build:gradle:8.1.0' }
 }
 
 rootProject.allprojects {
-    repositories {
-        google()
-        mavenCentral()
-    }
+    repositories { google(); mavenCentral() }
 }
 
 apply plugin: 'com.android.library'
 
-// ─── Auto-detect lite vs full from Dart imports ───────────────────────────────
-// Gradle scans the Flutter project's lib/ directory at configuration time.
-// Users simply import the variant they need — no --dart-define required:
-//
-//   import 'package:ffuzzy/lite.dart';   →  lite  ~254 KB  (no parallel / advanced modes)
-//   import 'package:ffuzzy/ffuzzy.dart'; →  full  ~531 KB
-//
-// If both are imported (unusual), full takes precedence.
-// The appropriate precompiled binary is downloaded automatically via cargokit,
-// exactly like the full binary is today — transparent to the user.
-
-def hasLite = false
-def hasFull = false
-
-// rootProject.projectDir = <flutter_app>/android/
-// Dart source lives one level up in lib/
-def dartSrcDir = new File(rootProject.projectDir, "../lib")
-if (dartSrcDir.exists()) {
-    def dartFiles = fileTree(dartSrcDir).include("**/*.dart").files.toList()
-    for (File f : dartFiles) {
-        def text = f.text
-        if (text.contains("package:ffuzzy/lite.dart"))    hasLite = true
-        if (text.contains("package:ffuzzy/ffuzzy.dart"))  hasFull = true
-        if (hasLite && hasFull) break  // found both — no need to keep scanning
-    }
-} else {
-    // Plugin built in isolation (no Flutter app above), default to full
-    hasFull = true
-}
-
-// full wins when both are present
-def isLite = hasLite && !hasFull
-
-if (isLite) {
-    println "[ffuzzy] lite.dart detected → lite variant (~254 KB, no parallel/advanced modes)"
-} else if (hasLite && hasFull) {
-    println "[ffuzzy] Both lite.dart and ffuzzy.dart detected → full variant wins"
-} else {
-    println "[ffuzzy] ffuzzy.dart detected → full variant (~531 KB)"
-}
-
-// ─── Build manifest dir for cargokit ─────────────────────────────────────────
-// Cargokit reads cargokit.yaml from manifestDir at Gradle configuration time
-// (before apply-from), so we must set up the dir before that call.
-//
-// For lite: create a clean temp dir containing only Cargo.toml + src/ + the
-// lite cargokit config.  The file set is identical to what CI uses, so
-// crate-hash values match and cargokit finds the correct precompiled release.
-//
-// For full: use rust/ directly (no change from current behaviour).
-
-def effectiveManifestDir = "../rust"
-
-if (isLite) {
-    def liteYaml = file("../rust/cargokit_lite.yaml")
-    if (!liteYaml.exists()) {
-        println "[ffuzzy] WARNING: cargokit_lite.yaml not found — falling back to full."
-    } else {
-        def liteDir = new File(buildDir, "ffuzzy_lite_manifest")
-        liteDir.mkdirs()
-
-        ant.copy(
-            file:     file("../rust/Cargo.toml").absolutePath,
-            tofile:   new File(liteDir, "Cargo.toml").absolutePath,
-            overwrite: true
-        )
-
-        def srcDest = new File(liteDir, "src")
-        srcDest.mkdirs()
-        ant.copy(todir: srcDest.absolutePath, overwrite: true) {
-            fileset(dir: file("../rust/src").absolutePath)
-        }
-
-        ant.copy(
-            file:     liteYaml.absolutePath,
-            tofile:   new File(liteDir, "cargokit.yaml").absolutePath,
-            overwrite: true
-        )
-
-        effectiveManifestDir = liteDir.absolutePath
-    }
-}
-// ─────────────────────────────────────────────────────────────────────────────
-
 android {
-    if (project.android.hasProperty("namespace")) {
-        namespace 'com.flutter_rust_bridge.rust_lib_ffuzzy'
-    }
-
-    compileSdkVersion 35
-    ndkVersion android.ndkVersion
-
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
-    }
+    namespace 'dev.ffz'
+    compileSdk 34
 
     defaultConfig {
-        minSdkVersion 19
+        minSdk 21
     }
-}
 
-apply from: "../cargokit/gradle/plugin.gradle"
-cargokit {
-    manifestDir = effectiveManifestDir
-    libname = "rust_lib_ffuzzy"
+    // The native debug/release split is driven by CMAKE_BUILD_TYPE, which AGP
+    // sets per variant: the debuggable `debug` variant -> Debug (locatable:
+    // symbols kept, crashes pinpointed in-process), `release` -> Release
+    // (compressed + stripped). See ../CMakeLists.txt. Nothing to override here.
+
+    externalNativeBuild {
+        cmake {
+            // clang/CMakeLists.txt (two levels up from android/).
+            path '../CMakeLists.txt'
+        }
+    }
 }

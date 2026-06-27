@@ -32,8 +32,26 @@ migrate_working_dir/
 /build/
 /coverage/
 
-# 便携 bundle,不入库
-ffuzzy.bundle
+# C 引擎构建产物(仓库根即 C 插件)
+build/
+*.o
+*.a
+*.exe
+tools/__pycache__/
+difftest/target/
+difftest/Cargo.lock
+difftest/difftest_c
+difftest/out_rust.txt
+difftest/out_c.txt
+difftest/diff.txt
+perf/target/
+perf/Cargo.lock
+perf/perf_c
+perf/data_ascii.txt
+perf/data_cjk.txt
+perf/q_*.txt
+perf/results.csv
 
-# 预编译二进制的签名私钥,绝不入库(放入 GitHub Secret PRIVATE_KEY)
+# 旧 Rust 基准(仅本地对比用)的便携 bundle 与签名私钥,绝不入库
+benchmark/ffuzzy.bundle
 precompiled_signing_key.PRIVATE.txt

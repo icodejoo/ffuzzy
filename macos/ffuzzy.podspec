@@ -1,44 +1,24 @@
 #
-# To learn more about a Podspec see http://guides.cocoapods.org/syntax/podspec.html.
-# Run `pod lib lint rust_lib_ffuzzy.podspec` to validate before publishing.
+# Flutter macOS FFI-plugin: static-links the ffz C sources. Symbols are then
+# reachable via DynamicLibrary.process(). (No Rust involved.)
 #
 Pod::Spec.new do |s|
   s.name             = 'ffuzzy'
-  s.version          = '0.0.1'
-  s.summary          = 'A new Flutter FFI plugin project.'
-  s.description      = <<-DESC
-A new Flutter FFI plugin project.
-                       DESC
-  s.homepage         = 'http://example.com'
+  s.version          = '0.3.0'
+  s.summary          = 'ffz C fuzzy matcher (nucleo-compatible).'
+  s.description      = 'Fuzzy/substring/prefix/postfix/exact matching engine in C.'
+  s.homepage         = 'https://github.com/icodejoo/ffuzzy'
   s.license          = { :file => '../LICENSE' }
-  s.author           = { 'Your Company' => 'email@example.com' }
-
-  # This will ensure the source files in Classes/ are included in the native
-  # builds of apps using this FFI plugin. Podspec does not support relative
-  # paths, so Classes contains a forwarder C file that relatively imports
-  # `../src/*` so that the C sources can be shared among all target platforms.
+  s.author           = { 'ffz' => 'ffz@example.com' }
   s.source           = { :path => '.' }
-  s.source_files     = 'Classes/**/*'
-  s.dependency 'FlutterMacOS'
-
-  s.platform = :osx, '10.11'
+  # ffi/*.c bundles the FFI shim + ffz_crash.c (native crash handler).
+  s.source_files     = '../src/*.c', '../ffi/*.c', '../include/*.h'
+  s.public_header_files = '../include/ffz.h', '../include/ffz_corpus.h'
+  # No forced -O/-DNDEBUG: Xcode's per-config defaults are the automatic switch
+  # (Debug -O0 -g = locatable; Release -Os + .dSYM = compressed, symbolized
+  # offline). The app's .dSYM symbolizes crash addresses regardless of
+  # symbol visibility, so hiding internals is safe.
+  s.compiler_flags   = '-fvisibility=hidden -funwind-tables'
+  s.platform         = :osx, '10.14'
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
-  s.swift_version = '5.0'
-
-  s.script_phase = {
-    :name => 'Build Rust library',
-    # First argument is relative path to the `rust` folder, second is name of rust library
-    :script => 'sh "$PODS_TARGET_SRCROOT/../cargokit/build_pod.sh" ../rust rust_lib_ffuzzy',
-    :execution_position => :before_compile,
-    :input_files => ['${BUILT_PRODUCTS_DIR}/cargokit_phony'],
-    # Let XCode know that the static library referenced in -force_load below is
-    # created by this build step.
-    :output_files => ["${BUILT_PRODUCTS_DIR}/librust_lib_ffuzzy.a"],
-  }
-  s.pod_target_xcconfig = {
-    'DEFINES_MODULE' => 'YES',
-    # Flutter.framework does not contain a i386 slice.
-    'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386',
-    'OTHER_LDFLAGS' => '-force_load ${BUILT_PRODUCTS_DIR}/librust_lib_ffuzzy.a',
-  }
 end
