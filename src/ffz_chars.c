@@ -157,3 +157,17 @@ uint16_t ffz_bonus_for(const ffz_config *cfg, ffz_char_class prev,
     if (cls == FFZ_CLASS_NONWORD) return FFZ_BONUS_NON_WORD;
     return 0;
 }
+
+#define FFZ_FAST_BONUS_BOUNDARY 8
+#define FFZ_FAST_BONUS_CAMEL    7
+
+uint8_t ffz_fast_bonus(ffz_char_class prev, ffz_char_class cls) {
+    // After any non-word / separator: word-boundary bonus.
+    if (prev <= FFZ_CLASS_DELIMITER && cls > FFZ_CLASS_DELIMITER)
+        return FFZ_FAST_BONUS_BOUNDARY;
+    // camelCase or letter→digit transition.
+    if ((prev == FFZ_CLASS_LOWER && cls == FFZ_CLASS_UPPER) ||
+        (prev != FFZ_CLASS_NUMBER && cls == FFZ_CLASS_NUMBER))
+        return FFZ_FAST_BONUS_CAMEL;
+    return 0;
+}

@@ -53,6 +53,9 @@ ffz_char_class ffz_class_and_normalize(uint32_t cp, const ffz_config *cfg,
 uint32_t ffz_normalize_cp(uint32_t cp, const ffz_config *cfg);
 uint16_t ffz_bonus_for(const ffz_config *cfg, ffz_char_class prev,
                        ffz_char_class cls);
+// Simplified 4-bonus model for FFZ_SCORE_FAST: BOUNDARY=8, CAMEL=7, else 0.
+// Ignores whitespace/delimiter distinction (no 10/9/8 tiers).
+uint8_t ffz_fast_bonus(ffz_char_class prev, ffz_char_class cls);
 // Pattern-layer helpers (case folding independent of config).
 uint32_t ffz_cp_to_lower(uint32_t cp);
 bool ffz_cp_is_upper(uint32_t cp);

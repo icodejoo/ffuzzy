@@ -40,6 +40,7 @@ ffz_config ffz_config_default(void) {
     c.ignore_case = true;
     c.prefer_prefix = false;
     fill_ascii_class(&c);
+    c.scoring_mode = FFZ_SCORE_FAST;
     return c;
 }
 
@@ -50,6 +51,7 @@ ffz_config ffz_config_match_paths(void) {
     c.bonus_boundary_white = FFZ_BONUS_BOUNDARY;
     c.initial_char_class = FFZ_CLASS_DELIMITER;
     fill_ascii_class(&c);
+    c.scoring_mode = FFZ_SCORE_FAST;
     return c;
 }
 

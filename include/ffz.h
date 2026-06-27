@@ -48,6 +48,15 @@ typedef enum {
 } ffz_mode;
 
 // ---------------------------------------------------------------------------
+// Scoring mode — controls the algorithm used in ffz_match / ffz_corpus_filter.
+// ---------------------------------------------------------------------------
+typedef enum {
+    FFZ_SCORE_FAST   = 0,  // default: 2-row rolling DP, simplified bonuses
+    FFZ_SCORE_OFF    = 1,  // prefilter only; score=0, original insertion order
+    FFZ_SCORE_NUCLEO = 2,  // nucleo-compatible full-matrix DP (legacy behaviour)
+} ffz_scoring_mode;
+
+// ---------------------------------------------------------------------------
 // Config — controls bonuses and normalization. Use the constructors below.
 // ---------------------------------------------------------------------------
 typedef struct {
@@ -62,6 +71,7 @@ typedef struct {
     // Internal: precomputed class for each ASCII byte (O(1) classification).
     // Filled by the constructors; do not set by hand.
     uint8_t ascii_class[128];
+    ffz_scoring_mode scoring_mode;  // algorithm for ffz_match / corpus_filter
 } ffz_config;
 
 // Default config: delimiters "/,:;|", boundary bonuses, normalize+ignore_case on.
