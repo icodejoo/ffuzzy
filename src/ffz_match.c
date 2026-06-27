@@ -32,17 +32,20 @@ bool ffz_matcher_reserve(ffz_matcher *m, size_t width, size_t needle_len) {
             if (nc > (SIZE_MAX >> 1)) return false;  // doubling overflow guard
             nc *= 2;
         }
-        // Assign on success before the next realloc so a partial failure never
-        // leaves a dangling (moved-and-freed) pointer in the struct.
-        uint32_t *h = (uint32_t *)realloc(m->hay, nc * sizeof(uint32_t));
-        if (!h) return false;
-        m->hay = h;
-        uint8_t *b = (uint8_t *)realloc(m->bonus, nc);
-        if (!b) return false;
-        m->bonus = b;
-        uint16_t *rl = (uint16_t *)realloc(m->roll, nc * 2 * sizeof(uint16_t));
-        if (!rl) return false;
-        m->roll = rl;
+        // H-2: guard against nc * 2 * sizeof(uint32_t) overflow before realloc.
+        if (nc > SIZE_MAX / (2 * sizeof(uint32_t))) return false;
+        // M-3: write each realloc result into a temporary pointer; commit all
+        // three to the struct only after every realloc succeeds, so a partial
+        // failure never leaves hay/bonus/roll with inconsistent capacities.
+        // realloc on failure leaves the original pointer valid, so each step
+        // below is safe to fall through without leaking memory.
+        uint32_t *nh = (uint32_t *)realloc(m->hay,  nc * sizeof(uint32_t));
+        if (!nh) return false;
+        uint8_t  *nb = (uint8_t  *)realloc(m->bonus, nc);
+        if (!nb) { m->hay = nh; return false; }
+        uint32_t *nr = (uint32_t *)realloc(m->roll, nc * 2 * sizeof(uint32_t));
+        if (!nr) { m->hay = nh; m->bonus = nb; return false; }
+        m->hay = nh; m->bonus = nb; m->roll = nr;
         m->cap_hay = nc;
     }
     size_t need = width * needle_len;  // bounded < FFZ_MAX_MATRIX_SIZE by caller
@@ -54,10 +57,9 @@ bool ffz_matcher_reserve(ffz_matcher *m, size_t width, size_t needle_len) {
         }
         ffz_mcell *g = (ffz_mcell *)realloc(m->mgrid, nc * sizeof(ffz_mcell));
         if (!g) return false;
-        m->mgrid = g;
         uint8_t *pm = (uint8_t *)realloc(m->pmat, nc);
-        if (!pm) return false;
-        m->pmat = pm;
+        if (!pm) { m->mgrid = g; return false; }
+        m->mgrid = g; m->pmat = pm;
         m->cap_grid = nc;
     }
     return true;
@@ -124,7 +126,8 @@ static long substring_best_ascii(const ffz_config *cfg, const uint8_t *h,
     uint16_t best_score = 0;
     size_t pos = 0;
     while (pos + nl <= hn) {
-        size_t off = ffz_find_ci(h + pos, hn - nl + 1 - pos, nd[0], ic);
+        size_t limit = hn - nl + 1 - pos;  // safe: loop guard pos + nl <= hn
+        size_t off = ffz_find_ci(h + pos, limit, nd[0], ic);
         if (off == FFZ_NF) break;
         size_t start = pos + off;
         bool ok = true;
@@ -212,12 +215,15 @@ static int32_t ffz_match_impl(ffz_matcher *m, ffz_str haystack, ffz_str needle,
     const ffz_config *cfg = &m->cfg;
     size_t hn = haystack.len, nl = needle.len;
 
+    if (nl == 0) return -1;  // P4b: empty needle — no meaningful match
+
     switch (mode) {
         case FFZ_EXACT: {
             size_t lead = ffz_str_ws(needle, 0, cfg) ? 0 : leading_ws(haystack, cfg);
             size_t trail =
                 ffz_str_ws(needle, nl - 1, cfg) ? 0 : trailing_ws(haystack, cfg);
             if (trail == hn) return -1;
+            if (lead > hn - trail) return -1;
             return exact_impl(m, haystack, needle, lead, hn - trail, out);
         }
         case FFZ_PREFIX: {
@@ -248,14 +254,37 @@ static int32_t ffz_match_impl(ffz_matcher *m, ffz_str haystack, ffz_str needle,
             if (!ffz_prefilter(cfg, haystack, needle, false, &start, &greedy_end,
                                &end))
                 return -1;
-            if (nl == end - start)
-                return (int32_t)ffz_calculate_score(m, haystack, needle, start,
-                                                    start + nl, out);
             switch (cfg->scoring_mode) {
                 case FFZ_SCORE_OFF:
-                    if (out)
-                        ffz_calculate_score(m, haystack, needle, start,
-                                            greedy_end, out);
+                    // L-6: avoid the full greedy bonus scan — just collect
+                    // indices via a plain forward subsequence walk.
+                    if (out) {
+                        size_t ki = 0;
+                        size_t nl2 = needle.len;
+                        if (haystack.b && needle.b) {
+                            // ASCII fast path: direct byte comparison with
+                            // ignore_case folding already baked into needle.b.
+                            for (size_t hi = start;
+                                 hi < greedy_end && ki < nl2; hi++) {
+                                uint8_t hc = haystack.b[hi];
+                                if (cfg->ignore_case && hc >= 'A' && hc <= 'Z')
+                                    hc += 32;
+                                if (hc == needle.b[ki]) {
+                                    ffz_indices_push(out, (uint32_t)hi);
+                                    ki++;
+                                }
+                            }
+                        } else {
+                            for (size_t hi = start;
+                                 hi < greedy_end && ki < nl2; hi++) {
+                                if (ffz_normalize_cp(ffz_at(haystack, hi), cfg)
+                                    == ffz_at(needle, ki)) {
+                                    ffz_indices_push(out, (uint32_t)hi);
+                                    ki++;
+                                }
+                            }
+                        }
+                    }
                     return 0;
                 case FFZ_SCORE_FAST:
                     if (!out)
@@ -263,6 +292,9 @@ static int32_t ffz_match_impl(ffz_matcher *m, ffz_str haystack, ffz_str needle,
                     return ffz_fuzzy_greedy(m, haystack, needle, start, greedy_end,
                                            out);
                 default: /* FFZ_SCORE_NUCLEO */
+                    if (nl == end - start)
+                        return (int32_t)ffz_calculate_score(m, haystack, needle,
+                                                            start, start + nl, out);
                     return ffz_fuzzy_optimal(m, haystack, needle, start, greedy_end,
                                             end, out);
             }

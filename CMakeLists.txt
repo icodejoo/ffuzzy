@@ -23,7 +23,7 @@ project(ffz LANGUAGES C)
 option(FFZ_CRASH_IN_RELEASE
   "Compile the in-process crash handler into release builds (+~26 KB unwind tables; ship the .debug/.pdb sidecar to symbolize)." OFF)
 
-file(GLOB FFZ_CORE "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
+file(GLOB FFZ_CORE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
 set(FFZ_SRCS ${FFZ_CORE} "${CMAKE_CURRENT_SOURCE_DIR}/ffi/ffz_ffi.c")
 
 # --- pick locatable (debug/profile) vs compressed (release) ----------------

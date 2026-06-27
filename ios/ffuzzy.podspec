@@ -12,8 +12,10 @@ Pod::Spec.new do |s|
   s.author           = { 'ffz' => 'ffz@example.com' }
   s.source           = { :path => '.' }
   # The C engine + FFI shim live two levels up (clang/src, clang/ffi, clang/include).
-  # ffi/*.c bundles the FFI shim + ffz_crash.c (native crash handler).
-  s.source_files     = '../src/*.c', '../ffi/*.c', '../include/*.h'
+  # Only ffz_ffi.c is included — ffz_crash.c requires FFZ_HAVE_CRASH_HANDLER and
+  # is compiled conditionally by CMake builds; Xcode/App Store apps use the OS
+  # tombstone + dSYM for crash symbolication instead.
+  s.source_files     = '../src/*.c', '../ffi/ffz_ffi.c', '../include/*.h'
   s.public_header_files = '../include/ffz.h', '../include/ffz_corpus.h'
   # No forced -O/-DNDEBUG: Xcode's per-config defaults are the automatic switch
   # (Debug -O0 -g = locatable; Release -Os + .dSYM = compressed, symbolized

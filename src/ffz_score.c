@@ -6,6 +6,7 @@
 
 uint16_t ffz_calculate_score(ffz_matcher *m, ffz_str hay, ffz_str needle,
                              size_t start, size_t end, ffz_indices *out) {
+    if (needle.len == 0) return 0;
     const ffz_config *cfg = &m->cfg;
     size_t needle_len = needle.len;
 
@@ -64,11 +65,23 @@ uint16_t ffz_calculate_score(ffz_matcher *m, ffz_str hay, ffz_str needle,
         if (start != 0) {
             size_t s1 = start - 1;
             if (s1 > 0xFFFF) s1 = 0xFFFF;
-            uint16_t penalty = (uint16_t)(FFZ_PENALTY_GAP_START +
-                                          FFZ_PENALTY_GAP_START * (uint16_t)s1);
-            score = (uint16_t)(score +
-                ffz_sat_sub_u16(FFZ_MAX_PREFIX_BONUS,
-                                (uint16_t)(penalty / FFZ_PREFIX_BONUS_SCALE)));
+            // [H-8] Use the same scaled formula as ffz_fuzzy_optimal (row-0
+            // prefix block): compute the bonus in PREFIX_BONUS_SCALE units,
+            // saturating-subtract gap penalties, then divide by the scale.
+            // This keeps ffz_calculate_score (used by the greedy path) aligned
+            // with the DP result to within rounding of integer division.
+            //
+            // [C-2] Work in uint32_t to avoid overflow: the intermediate value
+            // (FFZ_MAX_PREFIX_BONUS * FFZ_PREFIX_BONUS_SCALE - FFZ_PENALTY_GAP_START)
+            // fits in uint16_t, but the extension term s1 * FFZ_PENALTY_GAP_EXTENSION
+            // can reach 65535 — keeping everything in uint16_t before the sat_sub
+            // is safe here because ffz_sat_sub_u16 clamps at 0.
+            uint32_t ext = (uint32_t)s1 * (uint32_t)FFZ_PENALTY_GAP_EXTENSION;
+            uint16_t pb = ffz_sat_sub_u16(
+                (uint16_t)(FFZ_MAX_PREFIX_BONUS * FFZ_PREFIX_BONUS_SCALE
+                           - FFZ_PENALTY_GAP_START),
+                ext > 0xFFFFu ? (uint16_t)0xFFFF : (uint16_t)ext);
+            score = (uint16_t)(score + pb / FFZ_PREFIX_BONUS_SCALE);
         } else {
             score = (uint16_t)(score + FFZ_MAX_PREFIX_BONUS);
         }

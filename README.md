@@ -33,6 +33,9 @@ dependencies:
   ffuzzy: ^0.3.1
 ```
 
+> **No platform setup required** — the C sources are compiled and bundled automatically
+> by each platform's SDK on `flutter build`. Consumers need no extra toolchain (NDK, Xcode flags, etc.).
+
 ## Quick start
 
 ```dart
@@ -87,15 +90,20 @@ FuzzyCorpus<T>(
 static FuzzyCorpus<String> FuzzyCorpus.strings(Iterable<String> items, {…})
 
 // Convenience for a List<Map> searched by one field; hit.obj is the whole map:
-static FuzzyCorpus<Map<String, dynamic>> FuzzyCorpus.keyed(
+static FuzzyCorpus<Map<String, dynamic>> FuzzyCorpus.byKey(
     Iterable<Map<String, dynamic>> items, String field, {…})
+
+// Convenience for a List<Map> searched across multiple fields:
+// hit.matchedKey is the index into fields[] that produced the hit.
+static FuzzyCorpus<Map<String, dynamic>> FuzzyCorpus.byKeys(
+    Iterable<Map<String, dynamic>> items, List<String> fields, {…})
 
 // Build a (large) corpus with the inserts on a background isolate — no UI jank:
 static Future<FuzzyCorpus<T>> FuzzyCorpus.buildAsync<T>(
     Iterable<T> items, {required String Function(T) stringOf, …})
 ```
 
-> `strings`/`keyed`/`buildAsync` are static methods (not `factory` constructors)
+> `strings`/`byKey`/`byKeys`/`buildAsync` are static methods (not `factory` constructors)
 > because they pin the element type (`FuzzyCorpus<String>` / `<Map>`); a factory
 > on a generic class can't do that. Call syntax and performance are identical to
 > a constructor — they just delegate to `FuzzyCorpus(...)`.
@@ -109,7 +117,7 @@ Throws [`FuzzyException`](#fuzzyexception) if the native library can't be loaded
 | `void add(T item)` | Append one item. |
 | `void addAll(Iterable<T> items)` | Append many (insertion order is the item `index`). |
 | `Future<void> addAllAsync(Iterable<T> items)` | Append many with the native inserts on a **background isolate** (no UI jank). Exclusive while running. |
-| `void addKeyed(T item, List<FuzzyKey> keys)` | Append `item` with [alternate search keys](#multi-key--cjk-transliteration). The original text (`stringOf(item)`) is added automatically. |
+| `void addKey(T item, List<FuzzyKey> keys)` | Append `item` with [alternate search keys](#multi-key--cjk-transliteration). The original text (`stringOf(item)`) is added automatically. |
 | `void update(int index, T item)` | Replace the item at `index` (drops its alternate keys). |
 | `void removeAt(int index)` | Remove the item at `index`. |
 | `int removeWhere(bool Function(T) test)` | Remove every matching item; returns how many were removed. |
@@ -157,11 +165,24 @@ throws [`StateError`](#errors) (it would be a native use-after-free).
 
 | Member | Description |
 |---|---|
-| `void dispose()` | Free native memory now. Idempotent. Throws [`StateError`](#errors) if an async search/build is still in flight — await pending futures first. |
+| `void dispose()` | Safe to call at any time; if async work is in-flight, waits for it to complete before freeing native memory. Idempotent. |
 | `Future<void> disposeAndWait()` | Like `dispose`, but first awaits any in-flight async search/build, so it never throws. |
 
 A `NativeFinalizer` frees the corpus automatically if you forget to `dispose`,
 but calling `dispose`/`disposeAndWait` is preferred for prompt release.
+
+**In a Flutter `StatefulWidget`:**
+
+```dart
+@override
+void dispose() {
+  // unawaited is safe: NativeFinalizer acts as a safety net if the
+  // Future outlives the widget. The corpus will be freed after any
+  // in-flight async search completes.
+  unawaited(_corpus.disposeAndWait());
+  super.dispose();
+}
+```
 
 ## `FuzzyOptions`
 
@@ -177,6 +198,7 @@ every field has a default, so `const FuzzyOptions()` is the common base.
 | `threads` | `int` | `0` | `0` = auto (half the CPUs, capped at 8; hard ceiling cpu-1; <512 items always serial) |
 | `limit` | `int` | `0` | max hits (`0` = all) |
 | `highlight` | `bool` | `true` | `false` skips reading match indices (faster) |
+| `scoring` | `FuzzyScoring` | `FuzzyScoring.fast` | Scoring algorithm: `fast` (rolling DP, default), `off` (no ranking, insertion order), `nucleo` (full-matrix DP, highest accuracy ~2× CPU). |
 
 `FuzzyOptions` also has `copyWith(...)`. Example:
 
@@ -197,6 +219,7 @@ One search result.
 | `index` | `int` | The item's insertion order in the corpus. |
 | `score` | `int` | Match score (higher is better). |
 | `matchedKind` | `FuzzyKeyKind` | Which kind of key matched (original / pinyin / …). |
+| `matchedKindCode` | `int` | Raw kind code (e.g. `100`, `101`). Same as `matchedKind.code` for built-in kinds; for host-defined keys added via `addKey`/`byKeys` this preserves the original numeric value, letting you distinguish multiple custom key types where `matchedKind` would report `custom` for all. |
 | `matchedKey` | `int` | Which key of the item matched (`0` == original). |
 | `indices` | `List<int>` | Matched **codepoint** positions in the matched key — convert with [`fuzzyCodepointToUtf16`](#highlighting) before indexing a Dart `String`. |
 
@@ -232,7 +255,7 @@ The `FuzzyKeyKindCode` extension adds `int get code` (used when building a
 
 ## `FuzzyKey`
 
-An alternate search key attached to an item via [`FuzzyCorpus.addKeyed`](#building--mutating).
+An alternate search key attached to an item via [`FuzzyCorpus.addKey`](#building--mutating).
 
 | Member | Description |
 |---|---|
@@ -269,7 +292,7 @@ keys host-side and attach them (see [`FuzzyKey`](#fuzzykey)), so a CJK item is
 findable by typing latin.
 
 ```dart
-corpus.addKeyed(zhangsan, [
+corpus.addKey(zhangsan, [
   FuzzyKey.kind('zhangsan', FuzzyKeyKind.pinyin),
   FuzzyKey.kind('zs', FuzzyKeyKind.initials),
 ]);
@@ -277,6 +300,34 @@ corpus.addKeyed(zhangsan, [
 final h = corpus.fuzzy('zs').first;
 // h.matchedKind == FuzzyKeyKind.initials, h.matchedKey == 2
 ```
+
+#### Large list with pinyin keys
+
+For large datasets (10 000+ contacts), build the corpus in a background isolate
+to avoid blocking the UI thread:
+
+```dart
+// Spawn corpus construction in a background isolate
+final corpus = await Isolate.run(() async {
+  final c = FuzzyCorpus<Contact>(
+    contacts,
+    stringOf: (c) => c.name,
+    options: const FuzzyOptions(scoring: FuzzyScoring.fast),
+  );
+  // Add pinyin keys synchronously inside the isolate — no jank
+  for (int i = 0; i < contacts.length; i++) {
+    c.addKey(contacts[i], [
+      FuzzyKey(contacts[i].pinyin, kind: FuzzyKeyKind.pinyin),
+      FuzzyKey(contacts[i].initials, kind: FuzzyKeyKind.initials),
+    ]);
+  }
+  return c;
+});
+```
+
+> **Note**: `FuzzyCorpus` cannot be passed across isolates — return the data
+> and reconstruct on the owning isolate, or build entirely inside the isolate
+> and keep it there.
 
 ## Errors
 

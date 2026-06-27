@@ -581,6 +581,457 @@ static void test_rolling_dp(void) {
     ffz_matcher_free(m);
 }
 
+static void test_scoring_cross(void) {
+    // Create matchers for each scoring mode.
+    ffz_config cfgf = ffz_config_default(); cfgf.scoring_mode = FFZ_SCORE_FAST;
+    ffz_config cfgo = ffz_config_default(); cfgo.scoring_mode = FFZ_SCORE_OFF;
+    ffz_config cfgn = ffz_config_default(); cfgn.scoring_mode = FFZ_SCORE_NUCLEO;
+    ffz_matcher *mf = ffz_matcher_new(cfgf);
+    ffz_matcher *mo = ffz_matcher_new(cfgo);
+    ffz_matcher *mn = ffz_matcher_new(cfgn);
+
+    // OFF + SUBSTRING: score==0
+    CHECK(score(mo, "dart", "fuzzy.dart", NULL, FFZ_SUBSTRING) == 0,
+          "OFF substring: score==0");
+    // OFF + PREFIX: score==0 on match, -1 on miss
+    CHECK(score(mo, "sup", "supersonic", NULL, FFZ_PREFIX) == 0,
+          "OFF prefix: score==0 on match");
+    CHECK(score(mo, "son", "supersonic", NULL, FFZ_PREFIX) < 0,
+          "OFF prefix: -1 on miss");
+    // OFF + POSTFIX: score==0 on match
+    CHECK(score(mo, "sonic", "supersonic", NULL, FFZ_POSTFIX) == 0,
+          "OFF postfix: score==0");
+    // OFF + EXACT: score==0 on match
+    CHECK(score(mo, "abc", "abc", NULL, FFZ_EXACT) == 0,
+          "OFF exact: score==0");
+    // FAST == NUCLEO for non-fuzzy modes (both use exact_impl)
+    int32_t sf_pre = score(mf, "super", "supersonic", NULL, FFZ_PREFIX);
+    int32_t sn_pre = score(mn, "super", "supersonic", NULL, FFZ_PREFIX);
+    CHECK(sf_pre == sn_pre, "FAST==NUCLEO for PREFIX (both use exact_impl)");
+    CHECK(sf_pre > 0, "FAST prefix: positive score");
+
+    ffz_matcher_free(mf); ffz_matcher_free(mo); ffz_matcher_free(mn);
+}
+
+static void test_rolling_golden(void) {
+    ffz_config cfg = ffz_config_default(); cfg.scoring_mode = FFZ_SCORE_FAST;
+    ffz_matcher *m = ffz_matcher_new(cfg);
+
+    // Boundary match: 'cfg' at the start of 'cfg_helper' (BOUNDARY bonus=8,
+    // FIRST_CHAR_MULT=2). Row0: 8*2+16=32; Row1: 32+4+16=52; Row2: 52+4+16=72.
+    int32_t s1 = score(m, "cfg", "cfg_helper", NULL, FFZ_FUZZY);
+    CHECK(s1 == 72, "rolling golden: cfg/cfg_helper == 72");
+
+    // Interior match: 'cfg' in 'abcfgval' ('c' follows 'b'=LOWER, no boundary
+    // bonus). Row0: 0*2+16=16; Row1: 16+4+16=36; Row2: 36+4+16=56.
+    int32_t s2 = score(m, "cfg", "abcfgval", NULL, FFZ_FUZZY);
+    CHECK(s2 == 56, "rolling golden: cfg/abcfgval == 56");
+    CHECK(s1 > s2, "rolling: boundary > interior");
+
+    ffz_matcher_free(m);
+}
+
+static void test_fast_index_consistency(void) {
+    ffz_config cfg = ffz_config_default(); cfg.scoring_mode = FFZ_SCORE_FAST;
+    ffz_matcher *m = ffz_matcher_new(cfg);
+
+    // score-only path (rolling DP)
+    int32_t s_no_ix = score(m, "abc", "abcdef", NULL, FFZ_FUZZY);
+    CHECK(s_no_ix > 0, "FAST no-ix: positive");
+
+    // with-indices path (greedy) — score may differ from rolling, but must be valid
+    ffz_indices ix = {0};
+    int32_t s_with_ix = score(m, "abc", "abcdef", &ix, FFZ_FUZZY);
+    CHECK(s_with_ix > 0, "FAST with-ix: positive");
+    CHECK(ix.len == 3, "FAST with-ix: 3 indices");
+    ffz_indices_free(&ix);
+
+    ffz_matcher_free(m);
+}
+
+static void test_boundary_conditions(void) {
+    ffz_matcher *m = ffz_matcher_new(ffz_config_default());
+
+    // nl == hn == 1, FUZZY walks exact_impl
+    CHECK(score(m, "a", "a", NULL, FFZ_FUZZY) >= 0, "single char: fuzzy exact match");
+    CHECK(score(m, "a", "b", NULL, FFZ_FUZZY) < 0,  "single char: fuzzy mismatch");
+
+    // needle == haystack
+    CHECK(score(m, "hello", "hello", NULL, FFZ_FUZZY) >= 0, "needle==haystack");
+
+    // EXACT with surrounding whitespace
+    CHECK(score(m, "gem", "  gem  ", NULL, FFZ_EXACT) >= 0, "EXACT: strips leading+trailing ws");
+    CHECK(score(m, "gem", "  gem  ", NULL, FFZ_PREFIX) >= 0, "PREFIX: strips leading ws");
+
+    // empty haystack
+    CHECK(score(m, "a", "", NULL, FFZ_FUZZY) < 0, "empty haystack -> miss");
+
+    // Pattern layer strips leading/trailing whitespace from atoms, so " gem"
+    // and "gem " both become the atom "gem" before reaching ffz_match.
+    // The whitespace-disables-trim feature is a C-level ffz_match contract;
+    // test it here at the observable pattern-layer level.
+    CHECK(score(m, " gem", "  gem", NULL, FFZ_EXACT) >= 0,
+          "EXACT: pattern strips leading space, 'gem' still matches '  gem'");
+    CHECK(score(m, "gem ", "gem  ", NULL, FFZ_EXACT) >= 0,
+          "EXACT: pattern strips trailing space, 'gem' still matches 'gem  '");
+
+    ffz_matcher_free(m);
+}
+
+static void test_prefer_prefix(void) {
+    ffz_config cfg = ffz_config_default();
+    cfg.prefer_prefix = true;
+    ffz_matcher *m = ffz_matcher_new(cfg);
+
+    int32_t s_start = score(m, "abc", "abc_xyz", NULL, FFZ_FUZZY);
+    int32_t s_end   = score(m, "abc", "xyz_abc", NULL, FFZ_FUZZY);
+    CHECK(s_start > s_end, "prefer_prefix: earlier match scores higher");
+    CHECK(s_start > 0, "prefer_prefix: positive score for early match");
+
+    ffz_matcher_free(m);
+}
+
+static void test_corpus_scoring(void) {
+    // default corpus
+    ffz_corpus *c = ffz_corpus_new(ffz_config_default());
+    CHECK(ffz_corpus_scoring(c) == FFZ_SCORE_FAST, "corpus_scoring: default is FAST");
+    ffz_corpus_free(c);
+
+    // OFF corpus
+    ffz_config cfg = ffz_config_default(); cfg.scoring_mode = FFZ_SCORE_OFF;
+    ffz_corpus *co = ffz_corpus_new(cfg);
+    CHECK(ffz_corpus_scoring(co) == FFZ_SCORE_OFF, "corpus_scoring: OFF reflects config");
+    ffz_corpus_free(co);
+}
+
+static void test_cjk_modes(void) {
+    ffz_matcher *m = ffz_matcher_new(ffz_config_default());
+
+    // CJK SUBSTRING
+    CHECK(score(m, "\xE4\xB8\xAD\xE6\x96\x87",
+                   "\xE6\x90\x9C\xE7\xB4\xA2\xE4\xB8\xAD\xE6\x96\x87\xE5\xBC\x95\xE6\x93\x8E",
+                   NULL, FFZ_SUBSTRING) >= 0, "CJK substring match");
+    CHECK(score(m, "\xE4\xB8\xAD\xE6\x96\x87",
+                   "\xE6\x90\x9C\xE7\xB4\xA2\xE5\xBC\x95\xE6\x93\x8E",
+                   NULL, FFZ_SUBSTRING) < 0, "CJK substring miss");
+
+    // CJK EXACT
+    CHECK(score(m, "\xE4\xB8\xAD\xE6\x96\x87",
+                   "\xE4\xB8\xAD\xE6\x96\x87",
+                   NULL, FFZ_EXACT) >= 0, "CJK exact match");
+    CHECK(score(m, "\xE4\xB8\xAD\xE6\x96\x87",
+                   "\xE4\xB8\xAD\xE6\x96\x87\xE6\x90\x9C\xE7\xB4\xA2",
+                   NULL, FFZ_EXACT) < 0, "CJK exact length mismatch");
+
+    ffz_matcher_free(m);
+}
+
+static void test_rfind_boundaries(void) {
+    ffz_matcher *m = ffz_matcher_new(ffz_config_default());
+
+    // n=15: target at last byte
+    CHECK(score(m, "z", "aaaaaaaaaaaaaaz", NULL, FFZ_FUZZY) >= 0,
+          "rfind 15-byte: z at last pos");
+    // n=16: target at last byte
+    CHECK(score(m, "z", "aaaaaaaaaaaaaaaz", NULL, FFZ_FUZZY) >= 0,
+          "rfind 16-byte: z at last pos");
+    // n=17: target at last byte
+    CHECK(score(m, "z", "aaaaaaaaaaaaaaaaz", NULL, FFZ_FUZZY) >= 0,
+          "rfind 17-byte: z at last pos");
+    // prefilter end-widening: 'ab' in 'abXab' -> end=5 > greedy_end=3
+    int32_t s1 = score(m, "ab", "abXab", NULL, FFZ_FUZZY);
+    int32_t s2 = score(m, "ab", "abXxx", NULL, FFZ_FUZZY);
+    CHECK(s1 >= s2, "prefilter end-widening: wider window >= narrower");
+
+    ffz_matcher_free(m);
+}
+
+static void test_corpus_off_modes(void) {
+    ffz_corpus *c = ffz_corpus_new(ffz_config_default());
+    ffz_corpus_add(c, "alpha", 5);
+    ffz_corpus_add(c, "beta",  4);
+    ffz_corpus_add(c, "alpha", 5);  // duplicate
+
+    ffz_results r = {0};
+    // OFF + EXACT: both "alpha" entries match, insertion order
+    ffz_corpus_filter(c, "alpha", 5, FFZ_CASE_SMART, FFZ_NORM_SMART,
+                      FFZ_EXACT, ffz_parallel_off(), 0, FFZ_SCORE_OFF, &r);
+    CHECK(r.len == 2, "OFF+EXACT: both exact matches returned");
+    CHECK(r.hits[0].item_index == 0, "OFF+EXACT: first in insertion order");
+    CHECK(r.hits[1].item_index == 2, "OFF+EXACT: second in insertion order");
+    CHECK(r.hits[0].score == 0 && r.hits[1].score == 0, "OFF+EXACT: score==0");
+    ffz_results_free(&r);
+
+    ffz_corpus_free(c);
+}
+
+static void test_escape_syntax(ffz_matcher *m) {
+    // \! should NOT trigger negation — literal '!' in needle
+    CHECK(score(m, "\\!drag", "!dragon", NULL, FFZ_FUZZY) >= 0,
+          "escape: \\! is not negation, matches '!dragon'");
+    // Plain !drag IS negation
+    CHECK(score(m, "!drag", "!dragon", NULL, FFZ_FUZZY) < 0,
+          "escape: !drag without escape IS negation");
+
+    // dart$ with real $ is postfix and should match
+    CHECK(score(m, "dart$", "fuzzy.dart", NULL, FFZ_FUZZY) >= 0,
+          "escape: dart$ (real $) matches suffix");
+    // \$ should NOT trigger postfix
+    CHECK(score(m, "dart\\$", "nodart", NULL, FFZ_FUZZY) < 0,
+          "escape: dart\\$ (escaped $) does not match 'nodart'");
+
+    // ^sup as prefix: fails when not at start
+    CHECK(score(m, "^sup", "a sup thing", NULL, FFZ_FUZZY) < 0,
+          "escape: ^sup (prefix) fails when not leading");
+    // ^sup matches when at start
+    CHECK(score(m, "^sup", "supersonic", NULL, FFZ_FUZZY) >= 0,
+          "escape: ^sup (prefix) matches at start");
+    // \^ should NOT trigger prefix: needle becomes literal '^sup', so it
+    // requires '^' in the haystack — here we verify it FAILS on a haystack
+    // without '^' (contrast with unescaped ^sup which fails due to prefix).
+    CHECK(score(m, "\\^sup", "supersonic", NULL, FFZ_FUZZY) < 0,
+          "escape: \\^sup (literal '^sup' needle) misses 'supersonic' (no '^')");
+}
+
+static void test_query_edge_cases(ffz_matcher *m) {
+    // ^abc$ combination = EXACT
+    CHECK(score(m, "^abc$", "abc", NULL, FFZ_FUZZY) >= 0,
+          "query: ^abc$ matches exact 'abc'");
+    CHECK(score(m, "^abc$", "abcd", NULL, FFZ_FUZZY) < 0,
+          "query: ^abc$ rejects 'abcd'");
+    CHECK(score(m, "^abc$", "xabc", NULL, FFZ_FUZZY) < 0,
+          "query: ^abc$ rejects 'xabc'");
+
+    // whitespace-only query: 0 atoms -> score=0 (matches all)
+    CHECK(score(m, "   ", "anything", NULL, FFZ_FUZZY) == 0,
+          "query: whitespace-only gives score=0");
+
+    // double-space between words: empty word is dropped
+    CHECK(score(m, "fo  bar", "foo/bar", NULL, FFZ_FUZZY) >= 0,
+          "query: double-space drops empty word, still matches");
+}
+
+static void test_off_unicode_indices(void) {
+    ffz_config cfg = ffz_config_default();
+    cfg.scoring_mode = FFZ_SCORE_OFF;
+    ffz_matcher *m = ffz_matcher_new(cfg);
+
+    // Unicode haystack "東京都" (3 CJK codepoints), needle "京都"
+    // Expected codepoint indices: [1, 2]
+    ffz_indices ix = {0};
+    int32_t s = score(m,
+        "\xe4\xba\xac\xe9\x83\xbd",          // "京都" UTF-8
+        "\xe6\x9d\xb1\xe4\xba\xac\xe9\x83\xbd", // "東京都" UTF-8
+        &ix, FFZ_FUZZY);
+    CHECK(s == 0, "OFF+Unicode: score==0");
+    CHECK(ix.len == 2, "OFF+Unicode: 2 indices");
+    if (ix.len == 2) {
+        CHECK(ix.data[0] == 1, "OFF+Unicode: '京' at codepoint idx 1");
+        CHECK(ix.data[1] == 2, "OFF+Unicode: '都' at codepoint idx 2");
+    }
+    ffz_indices_free(&ix);
+
+    // ASCII OFF indices: strictly ascending
+    ffz_indices ix2 = {0};
+    score(m, "abc", "xaxbxcxd", &ix2, FFZ_FUZZY);
+    int asc = 1;
+    for (size_t i = 1; i < ix2.len; i++)
+        if (ix2.data[i] <= ix2.data[i-1]) asc = 0;
+    CHECK(asc, "OFF+ASCII: indices strictly ascending");
+    ffz_indices_free(&ix2);
+
+    ffz_matcher_free(m);
+}
+
+static void test_corpus_empty_query(void) {
+    ffz_corpus *c = ffz_corpus_new(ffz_config_default());
+    ffz_corpus_add(c, "alpha", 5);
+    ffz_corpus_add(c, "beta", 4);
+    ffz_corpus_add(c, "gamma", 5);
+
+    // Empty query: 0 atoms -> all items match with score=0
+    ffz_results r = {0};
+    ffz_corpus_filter(c, "", 0, FFZ_CASE_SMART, FFZ_NORM_SMART,
+                      FFZ_FUZZY, ffz_parallel_off(), 0, FFZ_SCORE_FAST, &r);
+    CHECK(r.len == 3, "empty query: all 3 items match");
+    int all_zero = 1;
+    for (size_t i = 0; i < r.len; i++)
+        if (r.hits[i].score != 0) all_zero = 0;
+    CHECK(all_zero, "empty query: all scores are 0");
+    ffz_results_free(&r);
+
+    // Empty query with limit
+    ffz_results r2 = {0};
+    ffz_corpus_filter(c, "", 0, FFZ_CASE_SMART, FFZ_NORM_SMART,
+                      FFZ_FUZZY, ffz_parallel_off(), 2, FFZ_SCORE_FAST, &r2);
+    CHECK(r2.len == 2, "empty query: limit=2 respected");
+    ffz_results_free(&r2);
+
+    ffz_corpus_free(c);
+}
+
+// P7: Malformed UTF-8 — robustness against the 6 ill-formed byte sequences.
+//
+// For each scenario we verify three things:
+//   a) Using the malformed string as a haystack with a valid pattern does not
+//      crash and returns a well-defined value (>= -1).
+//   b) Using the malformed string as a pattern with a valid haystack does not
+//      crash and returns a well-defined value (>= -1).
+//   c) ffz_str_from_utf8 decodes every ill-formed sequence as U+FFFD (0xFFFD),
+//      verified by reading the codepoint array produced by ffz_str_buf.
+//
+// ffz_decode_cp is an internal symbol; we reach it through the public
+// ffz_str_from_utf8 API which uses it as its sole decoder.  The ffz_str_buf
+// struct (cp, len, cap) is part of the public ffz.h header and safe to read.
+static void test_invalid_utf8(ffz_matcher *m) {
+    // Helper macro: build a ffz_str from a byte literal via ffz_str_from_utf8
+    // and assert that every produced codepoint equals U+FFFD.
+#define CHECK_ALL_FFFD(bytes, desc)                                           \
+    do {                                                                      \
+        const char *_s = (bytes);                                             \
+        size_t _n = sizeof(bytes) - 1;                                        \
+        ffz_str_buf _buf = {0};                                               \
+        ffz_str _str = ffz_str_from_utf8(_s, _n, &_buf);                     \
+        /* Non-ASCII input always goes through the codepoint path. */         \
+        int _all_fffd = 1;                                                    \
+        for (size_t _i = 0; _i < _str.len; _i++) {                           \
+            uint32_t _cp = _str.u ? _str.u[_i] : (uint32_t)(uint8_t)_str.b[_i]; \
+            if (_cp != 0xFFFDu) _all_fffd = 0;                               \
+        }                                                                     \
+        CHECK(_all_fffd, "decode: " desc " -> all U+FFFD");                   \
+        ffz_str_buf_free(&_buf);                                              \
+    } while (0)
+
+    // ------------------------------------------------------------------
+    // 1. Truncated 2-byte sequence: "\xC3" (first byte of U+00C3 'Ã', no cont.)
+    // ------------------------------------------------------------------
+    {
+        // a) malformed haystack -> decoded as U+FFFD, 'a' cannot match U+FFFD
+        int32_t s = score(m, "a", "\xC3", NULL, FFZ_FUZZY);
+        CHECK(s == -1, "truncated seq haystack: no match (U+FFFD != 'a')");
+        // b) malformed pattern -> Unicode needle vs ASCII haystack -> no match
+        s = score(m, "\xC3", "hello", NULL, FFZ_FUZZY);
+        CHECK(s == -1, "truncated seq pattern: no match (Unicode needle vs ASCII hay)");
+        // c) decode -> U+FFFD
+        CHECK_ALL_FFFD("\xC3", "truncated 2-byte seq");
+    }
+
+    // ------------------------------------------------------------------
+    // 2. Lone continuation bytes: "\x80\x80" (not a lead byte)
+    // ------------------------------------------------------------------
+    {
+        // a) each 0x80 is an invalid lead byte -> decoded as U+FFFD each
+        int32_t s = score(m, "a", "\x80\x80", NULL, FFZ_FUZZY);
+        CHECK(s == -1, "lone cont bytes haystack: no match (U+FFFD != 'a')");
+        // b) Unicode needle vs ASCII haystack -> no match
+        s = score(m, "\x80\x80", "hello", NULL, FFZ_FUZZY);
+        CHECK(s == -1, "lone cont bytes pattern: no match (Unicode needle vs ASCII hay)");
+        CHECK_ALL_FFFD("\x80\x80", "lone continuation bytes");
+    }
+
+    // ------------------------------------------------------------------
+    // 3. Overlong NUL: "\xC0\x80" (NUL encoded as 2 bytes instead of 1)
+    // ------------------------------------------------------------------
+    {
+        // a) overlong -> U+FFFD; 'a' cannot match U+FFFD
+        int32_t s = score(m, "a", "\xC0\x80", NULL, FFZ_FUZZY);
+        CHECK(s == -1, "overlong NUL haystack: no match (U+FFFD != 'a')");
+        // b) Unicode needle vs ASCII haystack -> no match
+        s = score(m, "\xC0\x80", "hello", NULL, FFZ_FUZZY);
+        CHECK(s == -1, "overlong NUL pattern: no match (Unicode needle vs ASCII hay)");
+        CHECK_ALL_FFFD("\xC0\x80", "overlong NUL (C0 80)");
+    }
+
+    // ------------------------------------------------------------------
+    // 4. Overlong '/': "\xC0\xAF" (U+002F encoded as 2 bytes)
+    // ------------------------------------------------------------------
+    {
+        // a) overlong -> U+FFFD; 'a' cannot match U+FFFD
+        int32_t s = score(m, "a", "\xC0\xAF", NULL, FFZ_FUZZY);
+        CHECK(s == -1, "overlong slash haystack: no match (U+FFFD != 'a')");
+        // b) Unicode needle vs ASCII haystack -> no match
+        s = score(m, "\xC0\xAF", "hello", NULL, FFZ_FUZZY);
+        CHECK(s == -1, "overlong slash pattern: no match (Unicode needle vs ASCII hay)");
+        CHECK_ALL_FFFD("\xC0\xAF", "overlong slash (C0 AF)");
+    }
+
+    // ------------------------------------------------------------------
+    // 5. Surrogate pair upper: "\xED\xA0\x80" (U+D800, forbidden in UTF-8)
+    // ------------------------------------------------------------------
+    {
+        // a) surrogate -> U+FFFD; 'a' cannot match U+FFFD
+        int32_t s = score(m, "a", "\xED\xA0\x80", NULL, FFZ_FUZZY);
+        CHECK(s == -1, "surrogate haystack: no match (U+FFFD != 'a')");
+        // b) Unicode needle vs ASCII haystack -> no match
+        s = score(m, "\xED\xA0\x80", "hello", NULL, FFZ_FUZZY);
+        CHECK(s == -1, "surrogate pattern: no match (Unicode needle vs ASCII hay)");
+        CHECK_ALL_FFFD("\xED\xA0\x80", "surrogate U+D800 (ED A0 80)");
+    }
+
+    // ------------------------------------------------------------------
+    // 6. Out-of-range: "\xF4\x90\x80\x80" (U+110000, above U+10FFFF)
+    // ------------------------------------------------------------------
+    {
+        // a) out-of-range -> U+FFFD; 'a' cannot match U+FFFD
+        int32_t s = score(m, "a", "\xF4\x90\x80\x80", NULL, FFZ_FUZZY);
+        CHECK(s == -1, "out-of-range haystack: no match (U+FFFD != 'a')");
+        // b) Unicode needle vs ASCII haystack -> no match
+        s = score(m, "\xF4\x90\x80\x80", "hello", NULL, FFZ_FUZZY);
+        CHECK(s == -1, "out-of-range pattern: no match (Unicode needle vs ASCII hay)");
+        CHECK_ALL_FFFD("\xF4\x90\x80\x80", "out-of-range U+110000 (F4 90 80 80)");
+    }
+
+    // ------------------------------------------------------------------
+    // 7. 4-byte overlong '<': "\xF0\x80\x80\xBC" (U+003C encoded as 4 bytes)
+    //    need==3 overlong branch: decoded cp=0x3C < 0x10000 -> U+FFFD
+    //    Pattern is Unicode (non-ASCII bytes), haystack is ASCII -> no match.
+    // ------------------------------------------------------------------
+    {
+        // a) overlong 4-byte as haystack: decoded as U+FFFD, not '<'; literal '<'
+        //    pattern cannot match
+        const char hay_lt[] = "<less-than>";
+        ffz_str_buf hb = {0};
+        ffz_str hs = ffz_str_from_utf8("\xF0\x80\x80\xBC", 4, &hb);
+        // hs is Unicode (u != NULL); pattern "<" is ASCII: ASCII hay.b is NULL
+        // -> use the pattern layer helper that wraps ffz_match directly
+        ffz_str_buf pb = {0};
+        ffz_str ps = ffz_str_from_utf8("<", 1, &pb);
+        // hs decoded: U+FFFD (one codepoint), ps: '<' (0x3C)
+        CHECK(hs.len == 1 && hs.u && hs.u[0] == 0xFFFDu,
+              "overlong 4-byte '<': decoded as U+FFFD");
+        int32_t s = ffz_match(m, hs, ps, FFZ_FUZZY, NULL);
+        CHECK(s == -1, "overlong 4-byte '<' haystack: U+FFFD does not match '<'");
+        ffz_str_buf_free(&hb);
+        ffz_str_buf_free(&pb);
+
+        // b) overlong 4-byte as pattern against ASCII haystack "<less-than>":
+        //    Unicode needle vs ASCII haystack -> no match
+        s = score(m, "\xF0\x80\x80\xBC", hay_lt, NULL, FFZ_FUZZY);
+        CHECK(s == -1,
+              "overlong 4-byte '<' pattern: Unicode needle vs ASCII hay -> no match");
+
+        // c) decode -> U+FFFD
+        CHECK_ALL_FFFD("\xF0\x80\x80\xBC", "overlong 4-byte '<' (F0 80 80 BC)");
+    }
+
+#undef CHECK_ALL_FFFD
+}
+
+static void test_prefer_prefix_nucleo(void) {
+    // prefer_prefix should work in NUCLEO mode (different code path from FAST)
+    ffz_config cfg = ffz_config_default();
+    cfg.prefer_prefix = true;
+    cfg.scoring_mode = FFZ_SCORE_NUCLEO;
+    ffz_matcher *m = ffz_matcher_new(cfg);
+
+    int32_t s_start = score(m, "abc", "abc_xyz", NULL, FFZ_FUZZY);
+    int32_t s_end   = score(m, "abc", "xyz_abc", NULL, FFZ_FUZZY);
+    CHECK(s_start > s_end, "NUCLEO prefer_prefix: earlier match scores higher");
+    CHECK(s_start > 0,     "NUCLEO prefer_prefix: positive score for early match");
+
+    ffz_matcher_free(m);
+}
+
 int main(void) {
     ffz_matcher *m = ffz_matcher_new(ffz_config_default());
     test_basic(m);
@@ -602,6 +1053,25 @@ int main(void) {
     test_corpus_scoring_modes();
     test_scoring_modes();
     test_rolling_dp();
+    test_scoring_cross();
+    test_rolling_golden();
+    test_fast_index_consistency();
+    test_boundary_conditions();
+    test_prefer_prefix();
+    test_corpus_scoring();
+    test_cjk_modes();
+    test_rfind_boundaries();
+    test_corpus_off_modes();
+    m = ffz_matcher_new(ffz_config_default());
+    test_escape_syntax(m);
+    test_query_edge_cases(m);
+    ffz_matcher_free(m);
+    test_off_unicode_indices();
+    test_corpus_empty_query();
+    test_prefer_prefix_nucleo();
+    m = ffz_matcher_new(ffz_config_default());
+    test_invalid_utf8(m);
+    ffz_matcher_free(m);
 
     printf("\n%d/%d checks passed\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;

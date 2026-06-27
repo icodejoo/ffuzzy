@@ -17,7 +17,7 @@ and retained only for performance comparison under `benchmark/`.
   - **`FuzzyOptions`** bundles `caseMatching`/`normalization`/`parallel`/
     `threads`/`limit`/`highlight` as corpus-wide defaults (constructor),
     overridable field-by-field via each method's named params.
-  - Mutation: `add`/`addAll`/`addKeyed`/`update`/`removeAt`/`removeWhere`/
+  - Mutation: `add`/`addAll`/`addKey`/`update`/`removeAt`/`removeWhere`/
     `refresh`/`clear` (append-only native corpus → edits rebuild in O(n)).
   - Plus `FuzzyHit`, `FuzzyKey`/`FuzzyKeyKind`, `fuzzyCodepointToUtf16`,
     `FuzzyException`, `FuzzyCrash`. See the README for the full surface.
@@ -45,8 +45,8 @@ idiomatic Dart/Flutter FFI binding. C-only; no Rust dependency.
   in the exact build; CJK/Latin-fold/full-case-fold Unicode support.
 
 ### Corpus & API
-- Resident `FuzzyCorpus` with `add`/`addAll`/`addKeyed`/`clear`/`filter`.
-- `addKeyed` for host-computed alternate keys (pinyin/romaji/initials).
+- Resident `FuzzyCorpus` with `add`/`addAll`/`addKey`/`clear`/`filter`.
+- `addKey` for host-computed alternate keys (pinyin/romaji/initials).
 - `filterAsync` runs the scan on a background isolate (UI never janks);
   overlapping calls are safe (per-call native matcher). Mutating a corpus while
   a `filterAsync` is in flight throws `StateError` (would be a use-after-free).

@@ -25,7 +25,9 @@ static unsigned ffz_cpu_count(void) {
 typedef pthread_t ffz_thr;
 static unsigned ffz_cpu_count(void) {
     long n = sysconf(_SC_NPROCESSORS_ONLN);
-    return n > 0 ? (unsigned)n : 1;
+    // Clamp to a sane range: old Android Bionic may return -1 or an inflated
+    // count that includes offline cores.
+    return (n >= 1 && n <= 256) ? (unsigned)n : 1;
 }
 #endif
 
@@ -122,6 +124,14 @@ static inline ffz_str key_str(const corpus_key *k) {
     return s;
 }
 
+// --- filtering result type (forward-declared here so ffz_corpus can cache it)
+typedef struct {
+    uint32_t item_index;
+    int32_t score;
+    int matched_kind;
+    uint32_t matched_key;
+} scored;
+
 struct ffz_corpus {
     ffz_config cfg;
     corpus_item *items;
@@ -137,8 +147,6 @@ ffz_corpus *ffz_corpus_new(ffz_config cfg) {
     ffz_corpus *c = (ffz_corpus *)calloc(1, sizeof(*c));
     if (!c) return NULL;
     c->cfg = cfg;
-    // No shared matcher: each filter() call (and each worker thread) owns its
-    // own matcher, so concurrent read-only filters never race on scratch.
     return c;
 }
 
@@ -240,13 +248,6 @@ void ffz_corpus_add_keyed(ffz_corpus *c, const char *item, size_t len,
 }
 
 // --- filtering ------------------------------------------------------------
-typedef struct {
-    uint32_t item_index;
-    int32_t score;
-    int matched_kind;
-    uint32_t matched_key;
-} scored;
-
 static int cmp_scored(const void *a, const void *b) {
     const scored *x = (const scored *)a, *y = (const scored *)b;
     if (x->score != y->score) return x->score < y->score ? 1 : -1;  // desc
@@ -303,6 +304,7 @@ static void results_push(ffz_results *r, ffz_hit hit) {
 }
 
 void ffz_results_free(ffz_results *r) {
+    if (!r->hits) { r->len = r->cap = 0; return; }
     for (size_t i = 0; i < r->len; i++) ffz_indices_free(&r->hits[i].indices);
     free(r->hits);
     r->hits = NULL;
@@ -318,7 +320,7 @@ typedef struct {
     bool bounded;
 } collector;
 
-static void coll_push(collector *col, scored s) {
+static inline void coll_push(collector *col, scored s) {
     if (!col->bounded) {
         col->buf[col->n++] = s;
         return;
@@ -378,9 +380,13 @@ typedef struct {
 } scan_job;
 
 static void scan_job_run(scan_job *j) {
+    if (!j->out) { j->n = 0; return; }
     // Each thread owns its matcher (the matcher holds mutable scratch).
-    ffz_matcher *m = ffz_matcher_new(j->c->cfg);
-    if (m) m->cfg.scoring_mode = j->scoring;
+    // Apply scoring_mode before construction so the matcher is fully configured
+    // from the start — avoids a post-init field overwrite.
+    ffz_config cfg = j->c->cfg;
+    cfg.scoring_mode = j->scoring;
+    ffz_matcher *m = ffz_matcher_new(cfg);
     if (m) {
         collector col = {j->out, 0, j->cap, j->bounded};
         scan_range(j->c, m, j->pat, j->lo, j->hi, &col);
@@ -434,17 +440,18 @@ void ffz_corpus_filter(ffz_corpus *c, const char *query, size_t query_len,
                        ffz_mode mode, ffz_parallel par, size_t limit,
                        ffz_scoring_mode scoring,
                        ffz_results *out) {
+    ffz_results_free(out);
+    if ((unsigned)scoring > FFZ_SCORE_NUCLEO) scoring = FFZ_SCORE_FAST;
     out->hits = NULL;
     out->len = out->cap = 0;
 
     ffz_pattern *pat = (mode == FFZ_FUZZY)
                            ? ffz_pattern_parse(query, query_len, cm, nm)
                            : ffz_pattern_new(query, query_len, cm, nm, mode);
-    // A matcher private to this call (holds mutable scratch). Allocating it here
-    // — rather than sharing one on the corpus — makes ffz_corpus_filter
-    // reentrant: concurrent read-only filters (e.g. from filterAsync) never race.
+    /* Each call gets its own matcher (mutable DP scratch), so concurrent
+     * filter calls on the same corpus are safe. */
     ffz_matcher *fm = ffz_matcher_new(c->cfg);
-    if (!pat || !fm) {  // OOM: return no matches rather than crash/match-all
+    if (!pat || !fm) {
         ffz_pattern_free(pat);
         ffz_matcher_free(fm);
         return;
@@ -455,14 +462,17 @@ void ffz_corpus_filter(ffz_corpus *c, const char *query, size_t query_len,
     // On any allocation/thread failure we degrade gracefully (serial / fewer
     // threads / inline) rather than crash.
     scored *sc = (scored *)malloc((c->n ? c->n : 1) * sizeof(scored));
+    if (!sc) {
+        ffz_pattern_free(pat);
+        ffz_matcher_free(fm);
+        return;
+    }
     size_t ns = 0;
-    unsigned nthreads = sc ? resolve_threads(par, c->n) : 0;
+    unsigned nthreads = resolve_threads(par, c->n);
     if (nthreads <= 1) {
-        if (sc) {
-            collector col = {sc, 0, c->n, false};  // serial keeps all then sorts
-            scan_range(c, fm, pat, 0, c->n, &col);
-            ns = col.n;
-        }
+        collector col = {sc, 0, c->n, false};  // serial keeps all then sorts
+        scan_range(c, fm, pat, 0, c->n, &col);
+        ns = col.n;
     } else {
         size_t chunk = (c->n + nthreads - 1) / nthreads;
         scan_job *jobs = (scan_job *)calloc(nthreads, sizeof(scan_job));
@@ -524,6 +534,7 @@ void ffz_corpus_filter(ffz_corpus *c, const char *query, size_t query_len,
         } else {
             if (ns) qsort(sc, ns, sizeof(scored), cmp_scored);  // NULL/0-safe
             keep = ns;
+            top = NULL;
         }
     }
 

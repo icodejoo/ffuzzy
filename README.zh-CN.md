@@ -28,6 +28,9 @@ dependencies:
   ffuzzy: ^0.3.1
 ```
 
+> **无需额外平台配置** — C 源码由各平台 SDK 在 `flutter build` 时自动编译打包，
+> 使用者不需要配置 NDK、Xcode 标志等任何工具链。
+
 ## 快速上手
 
 ```dart
@@ -79,9 +82,13 @@ FuzzyCorpus<T>(
 // 纯字符串便捷构造(item 即其搜索文本):
 static FuzzyCorpus<String> FuzzyCorpus.strings(Iterable<String> items, {…})
 
-// List<Map> 按某个字段搜;hit.obj 是整张 map:
-static FuzzyCorpus<Map<String, dynamic>> FuzzyCorpus.keyed(
+// List<Map> 按单个字段搜索；hit.obj 是整张 map:
+static FuzzyCorpus<Map<String, dynamic>> FuzzyCorpus.byKey(
     Iterable<Map<String, dynamic>> items, String field, {…})
+
+// List<Map> 跨多个字段搜索；hit.matchedKey 是命中的字段下标:
+static FuzzyCorpus<Map<String, dynamic>> FuzzyCorpus.byKeys(
+    Iterable<Map<String, dynamic>> items, List<String> fields, {…})
 
 // 在后台 isolate 上插入、构建(大)语料,不卡 UI:
 static Future<FuzzyCorpus<T>> FuzzyCorpus.buildAsync<T>(
@@ -90,7 +97,7 @@ static Future<FuzzyCorpus<T>> FuzzyCorpus.buildAsync<T>(
 
 加载原生库失败时抛 [`FuzzyException`](#fuzzyexception)。
 
-> `strings`/`keyed`/`buildAsync` 是 **static 方法**(而非 `factory` 构造),因为它们要
+> `strings`/`byKey`/`byKeys`/`buildAsync` 是 **static 方法**(而非 `factory` 构造),因为它们要
 > 把元素类型定死(`FuzzyCorpus<String>` / `<Map>`),而泛型类上的 factory 构造做不到这点。
 > 调用写法与性能都和构造函数完全一致 —— 它们只是转发给 `FuzzyCorpus(...)`。
 
@@ -101,7 +108,7 @@ static Future<FuzzyCorpus<T>> FuzzyCorpus.buildAsync<T>(
 | `void add(T item)` | 追加一条。 |
 | `void addAll(Iterable<T> items)` | 追加多条(插入顺序即各命中的 `index`)。 |
 | `Future<void> addAllAsync(Iterable<T> items)` | 在**后台 isolate** 上插入(不卡 UI)。运行期间独占。 |
-| `void addKeyed(T item, List<FuzzyKey> keys)` | 追加 `item` 并带[备用搜索键](#多键--cjk-转写)。原文本(`stringOf(item)`)自动加入。 |
+| `void addKey(T item, List<FuzzyKey> keys)` | 追加 `item` 并带[备用搜索键](#多键--cjk-转写)。原文本(`stringOf(item)`)自动加入。 |
 | `void update(int index, T item)` | 替换 `index` 处的项(其备用键被丢弃)。 |
 | `void removeAt(int index)` | 删除 `index` 处的项。 |
 | `int removeWhere(bool Function(T) test)` | 删除所有匹配项;返回删除条数。 |
@@ -144,11 +151,23 @@ use-after-free)。
 
 | 成员 | 说明 |
 |---|---|
-| `void dispose()` | 立即释放原生内存。幂等。若仍有异步搜索/构建在飞则抛 [`StateError`](#错误) —— 先 await。 |
+| `void dispose()` | 任何时候调用均安全；若异步任务正在执行，等待其完成后再释放原生内存。幂等。 |
 | `Future<void> disposeAndWait()` | 类似 `dispose`,但先 await 在飞的异步搜索/构建,因此不会抛异常。 |
 
 若你忘了 `dispose`,`NativeFinalizer` 会在 GC 时自动释放;但仍推荐显式
 `dispose`/`disposeAndWait` 以便及时回收。
+
+**在 Flutter `StatefulWidget` 中：**
+
+```dart
+@override
+void dispose() {
+  // unawaited 是安全的：NativeFinalizer 作为兜底，corpus 会在
+  // 所有进行中的异步搜索完成后自动释放。
+  unawaited(_corpus.disposeAndWait());
+  super.dispose();
+}
+```
 
 ## `FuzzyOptions`
 
@@ -163,6 +182,7 @@ use-after-free)。
 | `threads` | `int` | `0` | `0`=自动(CPU 一半,上限 8;硬上限 cpu-1;<512 项恒串行) |
 | `limit` | `int` | `0` | 最多返回数(`0`=全部) |
 | `highlight` | `bool` | `true` | `false` 跳过读取命中下标(更快) |
+| `scoring` | `FuzzyScoring` | `FuzzyScoring.fast` | 打分算法：`fast`（滚动 DP，默认）、`off`（不排名，按插入顺序）、`nucleo`（全矩阵 DP，精度最高，CPU 约 2×）。 |
 
 `FuzzyOptions` 还有 `copyWith(...)`。示例:
 
@@ -183,6 +203,7 @@ corpus.fuzzy('bar', limit: 10);    // 同样默认,但本次 limit 覆盖为 10
 | `index` | `int` | 该 item 在语料中的插入序号。 |
 | `score` | `int` | 匹配分(越高越好)。 |
 | `matchedKind` | `FuzzyKeyKind` | 命中的键种类(original / pinyin / …)。 |
+| `matchedKindCode` | `int` | 命中键的原始整数 kind 值（如 `100`、`101`）。内置 kind 与 `matchedKind.code` 相同；对通过 `addKey`/`byKeys` 添加的宿主自定义键，此字段保留原始数值，可区分 `matchedKind` 均显示 `custom` 的多种自定义键类型。 |
 | `matchedKey` | `int` | 命中的是该 item 的哪个键(`0`==原键)。 |
 | `indices` | `List<int>` | 命中键内的**码点**下标 —— 用于 Dart `String` 前先经 [`fuzzyCodepointToUtf16`](#高亮) 转换。 |
 
@@ -218,7 +239,7 @@ corpus.fuzzy('bar', limit: 10);    // 同样默认,但本次 limit 覆盖为 10
 
 ## `FuzzyKey`
 
-通过 [`FuzzyCorpus.addKeyed`](#增--删--改) 挂到某个 item 上的备用搜索键。
+通过 [`FuzzyCorpus.addKey`](#增--删--改) 挂到某个 item 上的备用搜索键。
 
 | 成员 | 说明 |
 |---|---|
@@ -254,7 +275,7 @@ matcher 不内置拼音/罗马音词典 —— 你在宿主侧算好备用键并
 让 CJK 项也能用拉丁键入找到。
 
 ```dart
-corpus.addKeyed(zhangsan, [
+corpus.addKey(zhangsan, [
   FuzzyKey.kind('zhangsan', FuzzyKeyKind.pinyin),
   FuzzyKey.kind('zs', FuzzyKeyKind.initials),
 ]);
@@ -262,6 +283,30 @@ corpus.addKeyed(zhangsan, [
 final h = corpus.fuzzy('zs').first;
 // h.matchedKind == FuzzyKeyKind.initials, h.matchedKey == 2
 ```
+
+#### 大列表 + 拼音批量建索引
+
+对于万级联系人，请在后台 Isolate 中构建语料库以避免 UI 卡顿：
+
+```dart
+final corpus = await Isolate.run(() async {
+  final c = FuzzyCorpus<Contact>(
+    contacts,
+    stringOf: (c) => c.name,
+    options: const FuzzyOptions(scoring: FuzzyScoring.fast),
+  );
+  for (int i = 0; i < contacts.length; i++) {
+    c.addKey(contacts[i], [
+      FuzzyKey(contacts[i].pinyin, kind: FuzzyKeyKind.pinyin),
+      FuzzyKey(contacts[i].initials, kind: FuzzyKeyKind.initials),
+    ]);
+  }
+  return c;
+});
+```
+
+> **注意**：`FuzzyCorpus` 不能跨 Isolate 传递——在 Isolate 内部完整构建后直接使用，
+> 或将数据传回主 Isolate 重建。
 
 ## 错误
 

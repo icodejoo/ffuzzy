@@ -1,6 +1,7 @@
 // Pattern / Atom layer: parses query syntax (`! ^ ' $`, escaped whitespace),
 // splits words into atoms, and normalizes each needle. Port of nucleo
 // `pattern.rs` at codepoint granularity.
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -47,19 +48,19 @@ static void atom_build(ffz_atom *a, const char *raw, size_t n,
     const uint8_t *s = (const uint8_t *)raw;
     size_t i = 0;
     bool saw_backslash = false;
+    size_t backslash_idx = 0;
     while (i < n) {
         uint32_t c = ffz_decode_cp(s, n, &i);
         if (escape_ws) {
             if (saw_backslash) {
-                // Replace the pushed backslash with the escaped space. Guard
-                // v.len: the backslash push may have been dropped on OOM.
                 if (c == ' ') {
-                    if (v.len > 0) v.d[v.len - 1] = ' ';
+                    // Replace the backslash (only if it was successfully pushed).
+                    if (v.len > backslash_idx) v.d[backslash_idx] = ' ';
                     saw_backslash = false;
                     continue;
                 }
-                // not an escaped space: keep the backslash already pushed
             }
+            if (c == '\\') backslash_idx = v.len;  // record before push
             saw_backslash = (c == '\\');
         }
         // case handling
@@ -210,7 +211,9 @@ void ffz_pattern_free(ffz_pattern *p) {
 int32_t ffz_pattern_match(ffz_matcher *m, const ffz_pattern *p,
                           ffz_str haystack, ffz_indices *out) {
     if (!p || p->n == 0) return 0;
-    int32_t total = 0;
+    bool saved_ic = m->cfg.ignore_case;
+    bool saved_nm = m->cfg.normalize;
+    int64_t total64 = 0;
     for (size_t i = 0; i < p->n; i++) {
         const ffz_atom *a = &p->atoms[i];
         m->cfg.ignore_case = a->ignore_case;
@@ -218,12 +221,25 @@ int32_t ffz_pattern_match(ffz_matcher *m, const ffz_pattern *p,
         ffz_str needle = {a->nb, a->nu, a->needle_len};
         if (a->negative) {
             int32_t s = ffz_match(m, haystack, needle, a->kind, NULL);
-            if (s >= 0) return -1;  // negative atom matched -> reject
+            if (s >= 0) {
+                m->cfg.ignore_case = saved_ic;
+                m->cfg.normalize   = saved_nm;
+                return -1;  // negative atom matched -> reject
+            }
         } else {
             int32_t s = ffz_match(m, haystack, needle, a->kind, out);
-            if (s < 0) return -1;
-            total += s;
+            if (s < 0) {
+                m->cfg.ignore_case = saved_ic;
+                m->cfg.normalize   = saved_nm;
+                return -1;
+            }
+            total64 += s;
         }
     }
-    return total;
+    m->cfg.ignore_case = saved_ic;
+    m->cfg.normalize   = saved_nm;
+    int32_t result = total64 > INT32_MAX ? INT32_MAX
+                   : total64 < INT32_MIN ? INT32_MIN
+                   : (int32_t)total64;
+    return result;
 }

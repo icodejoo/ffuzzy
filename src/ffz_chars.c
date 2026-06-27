@@ -52,15 +52,13 @@ static bool is_unicode_ws(uint32_t cp) {
 
 // --- classification -------------------------------------------------------
 #ifndef FFZ_COMPACT_CLASS
-static uint32_t read_varint(const uint8_t *d, size_t *pos) {
+static uint32_t read_varint(const uint8_t *d, size_t len, size_t *pos) {
     uint32_t r = 0;
-    int shift = 0;
-    uint8_t b;
-    do {
-        b = d[(*pos)++];
+    for (int shift = 0; shift < 35 && *pos < len; shift += 7) {
+        uint8_t b = d[(*pos)++];
         r |= (uint32_t)(b & 0x7F) << shift;
-        shift += 7;
-    } while (b & 0x80);
+        if (!(b & 0x80)) return r;
+    }
     return r;
 }
 
@@ -78,10 +76,10 @@ static ffz_char_class class_table_lookup(uint32_t cp) {
     uint32_t cur_start = ck->start;
     // First entry at the checkpoint: take its class; its delta is relative to
     // the previous (unknown) start, but cur_start is already known from ck.
-    uint32_t v = read_varint(ffz_class_data, &pos);
+    uint32_t v = read_varint(ffz_class_data, ffz_class_data_len, &pos);
     ffz_char_class cls = (ffz_char_class)(v & 7u);
     while (pos < ffz_class_data_len) {
-        v = read_varint(ffz_class_data, &pos);
+        v = read_varint(ffz_class_data, ffz_class_data_len, &pos);
         uint32_t next = cur_start + (v >> 3);
         if (next > cp) break;
         cur_start = next;

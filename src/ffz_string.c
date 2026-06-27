@@ -58,7 +58,7 @@ ffz_config ffz_config_match_paths(void) {
 // --- indices --------------------------------------------------------------
 void ffz_indices_push(ffz_indices *ix, uint32_t v) {
     if (ix->len == ix->cap) {
-        size_t ncap = ix->cap ? ix->cap * 2 : 16;
+        size_t ncap = ix->cap ? ix->cap * 2 : 32;
         uint32_t *d = (uint32_t *)realloc(ix->data, ncap * sizeof(uint32_t));
         if (!d) return;  // OOM: drop rather than deref NULL (no overflow check
         ix->data = d;    // needed: ncap is bounded by needle_len <= 2048)
@@ -134,7 +134,9 @@ uint32_t ffz_decode_cp(const uint8_t *s, size_t n, size_t *pos) {
         cp = (cp << 6) | (bk & 0x3F);
     }
     *pos = i + need + 1;
-    if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;  // overlong/surrogate
+    if ((need == 1 && cp < 0x80) || (need == 2 && cp < 0x800) ||
+        (need == 3 && cp < 0x10000)) cp = 0xFFFD;  // overlong encoding
+    if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;  // out-of-range/surrogate
     return cp;
 }
 

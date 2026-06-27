@@ -3,6 +3,7 @@
 #ifndef FFZ_INTERNAL_H
 #define FFZ_INTERNAL_H
 
+#include <string.h>  // memchr, memcpy (used by ffz_find_ci and SWAR path)
 #include "ffz.h"
 
 // --- scoring constants (identical to nucleo) ------------------------------
@@ -38,7 +39,9 @@ struct ffz_matcher {
     uint8_t  *bonus;    // precomputed bonus per column          [cap_hay]
     ffz_mcell *mgrid;   // full M grid (needle_len x width)       [cap_grid]
     uint8_t  *pmat;     // full P-origin bits (needle_len x width)[cap_grid]
-    uint16_t *roll;     // 2 rolling rows for FAST DP             [2 * cap_hay]
+    uint32_t *roll;     // 2 rolling rows for FAST DP [2 * cap_hay uint32_t]
+                        // Row stride is W (current window width), NOT cap_hay.
+                        // Rows start at roll[0] and roll[W]; see ffz_fuzzy_rolling.
     size_t cap_hay, cap_grid;
 };
 
@@ -67,8 +70,7 @@ static inline uint32_t ffz_at(ffz_str s, size_t i) {
     return s.b ? (uint32_t)s.b[i] : s.u[i];
 }
 
-#include <string.h>
-#define FFZ_NF ((size_t)-1)
+#define FFZ_NF ((size_t)-1)  // sentinel: "not found"
 
 // The SWAR/SIMD byte search (ffz_find_ci) and the all-ASCII scan assume a
 // little-endian target (byte i is the i-th least-significant). All supported
@@ -274,6 +276,10 @@ void ffz_indices_push(ffz_indices *ix, uint32_t v);
 uint32_t ffz_decode_cp(const uint8_t *s, size_t n, size_t *pos);
 static inline uint16_t ffz_sat_sub_u16(uint16_t a, uint16_t b) {
     return a > b ? (uint16_t)(a - b) : 0;
+}
+static inline uint16_t ffz_sat_add_u16(uint16_t a, uint16_t b) {
+    uint32_t s = (uint32_t)a + (uint32_t)b;
+    return s > 0xFFFFu ? (uint16_t)0xFFFF : (uint16_t)s;
 }
 static inline uint16_t ffz_u16_max(uint16_t a, uint16_t b) {
     return a > b ? a : b;

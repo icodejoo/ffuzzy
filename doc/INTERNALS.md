@@ -124,7 +124,7 @@ verifies its range compression is lossless before writing.
 index-layer feature: the host generates alternate search keys (the dictionary
 stays host-side) and the matcher just matches more strings. From **C** you can
 register a `ffz_transliterator` callback (`ffz_corpus.h`) invoked per item; from
-**Dart** the equivalent is `FuzzyCorpus.addKeyed(item, [FuzzyKey(...)])` — you
+**Dart** the equivalent is `FuzzyCorpus.addKey(item, [FuzzyKey(...)])` — you
 compute the keys host-side and pass them in (the C function-pointer hook isn't
 bridged over FFI). A hit reports which key matched via `matchedKind`/`matchedKey`.
 

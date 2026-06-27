@@ -12,7 +12,7 @@ const _items = <String>[
   'packages/ffz/lib/ffz.dart',
   'README.md',
   'CHANGELOG.md',
-  '中文搜索引擎', // findable by pinyin via addKeyed below
+  '中文搜索引擎', // findable by pinyin via addKey below
   'café_menu.json',
   'src/main.rs',
 ];
@@ -43,7 +43,7 @@ class _SearchPageState extends State<SearchPage> {
     super.initState();
     _corpus = FuzzyCorpus.strings(_items, matchPaths: true);
     // Index the CJK item by host-computed pinyin/initials so latin typing finds it.
-    _corpus.addKeyed('中文搜索引擎', [
+    _corpus.addKey('中文搜索引擎', [
       FuzzyKey.kind('zhongwensousuoyinqing', FuzzyKeyKind.pinyin),
       FuzzyKey.kind('zwssyq', FuzzyKeyKind.initials),
     ]);

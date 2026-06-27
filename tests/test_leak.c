@@ -116,6 +116,27 @@ static void oom_cycle(int budget) {
     ffz_dbg_fail_after(-1);  // disable before returning
 }
 
+// NUCLEO mode OOM injection: every allocation from #budget onward fails.
+static void oom_cycle_nucleo(int budget) {
+    ffz_dbg_fail_after(budget);
+    ffz_config cfg = ffz_config_default();
+    cfg.scoring_mode = FFZ_SCORE_NUCLEO;
+    ffz_corpus *c = ffz_corpus_new(cfg);
+    if (c) {
+        char buf[40];
+        for (int i = 0; i < 400; i++) {
+            int n = snprintf(buf, sizeof(buf), "oom_nucleo_%d_long", i);
+            ffz_corpus_add(c, buf, (size_t)n);
+        }
+        ffz_results r = {0};
+        ffz_corpus_filter(c, "oom", 3, FFZ_CASE_SMART, FFZ_NORM_SMART,
+                          FFZ_FUZZY, ffz_parallel_off(), 10, FFZ_SCORE_NUCLEO, &r);
+        ffz_results_free(&r);
+        ffz_corpus_free(c);
+    }
+    ffz_dbg_fail_after(-1);
+}
+
 int main(void) {
     size_t base = ffz_alloc_live_blocks();
     CHECK(base == 0, "baseline live blocks == 0");
@@ -127,6 +148,10 @@ int main(void) {
     // OOM injection across a spread of budgets: never crash, never leak.
     for (int budget = 1; budget <= 60; budget++) oom_cycle(budget);
     CHECK(ffz_alloc_live_blocks() == base, "no leak across OOM-injected cycles");
+
+    // NUCLEO mode OOM injection: same guarantee in the full-matrix DP path.
+    for (int budget = 1; budget <= 80; budget++) oom_cycle_nucleo(budget);
+    CHECK(ffz_alloc_live_blocks() == base, "no leak across NUCLEO OOM-injected cycles");
 
     // Many matcher/pattern cycles: live must return to baseline every time.
     for (int i = 0; i < 2000; i++) matcher_cycle();

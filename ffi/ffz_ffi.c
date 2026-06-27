@@ -12,6 +12,11 @@
 #include "ffz_crash.h"
 #endif
 
+// FFZ_API marks symbols for export from the shared library.
+// dllimport is intentionally omitted: all consumers (Dart FFI) use dynamic
+// symbol lookup and never link against an import library, so the export-only
+// definition is correct for both the implementation and any C test drivers
+// that compile ffz_ffi.c directly into the same translation unit.
 #ifdef _WIN32
 #define FFZ_API __declspec(dllexport)
 #else
@@ -47,12 +52,14 @@ FFZ_API ffz_corpus *ffz_ffi_new_cfg(int paths, int prefer_prefix) {
 // Like ffz_ffi_new_cfg but also sets the corpus-level scoring mode.
 // scoring: 0=FAST (default), 1=OFF, 2=NUCLEO.
 FFZ_API ffz_corpus *ffz_ffi_new_cfg2(int paths, int prefer_prefix, int scoring) {
+    if ((unsigned)scoring > FFZ_SCORE_NUCLEO) scoring = FFZ_SCORE_FAST;
     ffz_config cfg = paths ? ffz_config_match_paths() : ffz_config_default();
     cfg.prefer_prefix = prefer_prefix != 0;
     cfg.scoring_mode  = (ffz_scoring_mode)scoring;
     return ffz_corpus_new(cfg);
 }
 FFZ_API void ffz_ffi_add(ffz_corpus *c, const char *s, size_t n) {
+    if (!c) return;
     ffz_corpus_add(c, s, n);
 }
 // Add an item with explicit alternate keys (host-computed pinyin/romaji/etc).
@@ -61,7 +68,10 @@ FFZ_API void ffz_ffi_add(ffz_corpus *c, const char *s, size_t n) {
 FFZ_API void ffz_ffi_add_keyed(ffz_corpus *c, const char *s, size_t n,
                                const char *const *texts, const size_t *lens,
                                const int *kinds, size_t nkeys) {
+    if (!c) return;
     if (nkeys == 0) { ffz_corpus_add(c, s, n); return; }
+    if (!texts || !lens || !kinds) { ffz_corpus_add(c, s, n); return; }
+    if (nkeys > SIZE_MAX / sizeof(ffz_key)) { ffz_corpus_add(c, s, n); return; }
     ffz_key *keys = (ffz_key *)malloc(nkeys * sizeof(ffz_key));
     if (!keys) { ffz_corpus_add(c, s, n); return; }  // OOM: keep ORIGINAL only
     for (size_t i = 0; i < nkeys; i++) {
@@ -72,9 +82,9 @@ FFZ_API void ffz_ffi_add_keyed(ffz_corpus *c, const char *s, size_t n,
     ffz_corpus_add_keyed(c, s, n, keys, nkeys);
     free(keys);
 }
-FFZ_API size_t ffz_ffi_len(ffz_corpus *c) { return ffz_corpus_len(c); }
-FFZ_API void ffz_ffi_clear(ffz_corpus *c) { ffz_corpus_clear(c); }
-FFZ_API void ffz_ffi_free(ffz_corpus *c) { ffz_corpus_free(c); }
+FFZ_API size_t ffz_ffi_len(ffz_corpus *c) { if (!c) return 0; return ffz_corpus_len(c); }
+FFZ_API void ffz_ffi_clear(ffz_corpus *c) { if (!c) return; ffz_corpus_clear(c); }
+FFZ_API void ffz_ffi_free(ffz_corpus *c) { if (!c) return; ffz_corpus_free(c); }
 
 // --- filter: mode 0=fuzzy 1=substring 2=prefix 3=postfix 4=exact (word);
 //     cm 0=respect 1=ignore 2=smart;  nm 0=never 1=smart ---------------------
@@ -85,6 +95,11 @@ FFZ_API ffz_results *ffz_ffi_filter_ex2(ffz_corpus *c, const char *q, size_t qn,
                                         int mode, int cm, int nm,
                                         int parallel, int threads,
                                         size_t limit, int scoring) {
+    if (!c || !q) return NULL;  /* use q="" for an empty query (match all) */
+    if ((unsigned)mode    > FFZ_EXACT        ||
+        (unsigned)cm      > FFZ_CASE_SMART   ||
+        (unsigned)nm      > FFZ_NORM_SMART   ||
+        (unsigned)scoring > FFZ_SCORE_NUCLEO) return NULL;
     ffz_results *r = (ffz_results *)calloc(1, sizeof(ffz_results));
     if (!r) return NULL;
     ffz_parallel par;
@@ -110,26 +125,35 @@ FFZ_API ffz_results *ffz_ffi_filter(ffz_corpus *c, const char *q, size_t qn,
 }
 
 // --- result accessors (no struct layout needed on the Dart side) ----------
-FFZ_API size_t ffz_ffi_results_len(ffz_results *r) { return r->len; }
+FFZ_API size_t ffz_ffi_results_len(ffz_results *r) {
+    return r ? r->len : 0;
+}
 FFZ_API uint32_t ffz_ffi_results_item(ffz_results *r, size_t i) {
+    if (!r || i >= r->len) return UINT32_MAX;
     return r->hits[i].item_index;
 }
 FFZ_API int32_t ffz_ffi_results_score(ffz_results *r, size_t i) {
+    if (!r || i >= r->len) return -1;
     return r->hits[i].score;
 }
 FFZ_API int ffz_ffi_results_kind(ffz_results *r, size_t i) {
+    if (!r || i >= r->len) return -1;
     return r->hits[i].matched_kind;
 }
 FFZ_API uint32_t ffz_ffi_results_key(ffz_results *r, size_t i) {
+    if (!r || i >= r->len) return UINT32_MAX;
     return r->hits[i].matched_key;
 }
 FFZ_API size_t ffz_ffi_results_nindices(ffz_results *r, size_t i) {
+    if (!r || i >= r->len) return 0;
     return r->hits[i].indices.len;
 }
 FFZ_API uint32_t ffz_ffi_results_index(ffz_results *r, size_t i, size_t j) {
+    if (!r || i >= r->len || j >= r->hits[i].indices.len) return UINT32_MAX;
     return r->hits[i].indices.data[j];
 }
 FFZ_API void ffz_ffi_results_free(ffz_results *r) {
+    if (!r) return;
     ffz_results_free(r);
     free(r);
 }

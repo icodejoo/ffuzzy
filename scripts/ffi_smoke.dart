@@ -39,14 +39,14 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  // addKeyed: a CJK item findable by host-computed pinyin/initials.
-  c.addKeyed('张三', [
+  // addKey: a CJK item findable by host-computed pinyin/initials.
+  c.addKey('张三', [
     FuzzyKey.kind('zhangsan', FuzzyKeyKind.pinyin),
     FuzzyKey.kind('zs', FuzzyKeyKind.initials),
   ]);
   final py = c.fuzzy('zhangsan');
   if (py.isEmpty || py.first.matchedKind != FuzzyKeyKind.pinyin) {
-    throw 'addKeyed pinyin key did not match';
+    throw 'addKey pinyin key did not match';
   }
 
   // Mutation (rebuild path): removeWhere drops items + returns the count.
@@ -68,7 +68,7 @@ Future<void> main(List<String> args) async {
   }
 
   // keyed: a List<Map> searched by a field; hit.obj is the whole map.
-  final maps = FuzzyCorpus.keyed([
+  final maps = FuzzyCorpus.byKey([
     {'name': 'Alice', 'id': 1},
     {'name': 'Bob', 'id': 2},
   ], 'name', libraryPath: libPath);
