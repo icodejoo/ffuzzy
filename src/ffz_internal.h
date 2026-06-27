@@ -35,9 +35,10 @@ struct ffz_matcher {
     ffz_config cfg;
     // Reusable DP scratch, grown on demand (see ffz_fuzzy.c / ffz_match.c).
     uint32_t *hay;      // normalized haystack window           [cap_hay]
-    uint8_t *bonus;     // precomputed bonus per column          [cap_hay]
+    uint8_t  *bonus;    // precomputed bonus per column          [cap_hay]
     ffz_mcell *mgrid;   // full M grid (needle_len x width)       [cap_grid]
-    uint8_t *pmat;      // full P-origin bits (needle_len x width)[cap_grid]
+    uint8_t  *pmat;     // full P-origin bits (needle_len x width)[cap_grid]
+    uint16_t *roll;     // 2 rolling rows for FAST DP             [2 * cap_hay]
     size_t cap_hay, cap_grid;
 };
 
@@ -166,6 +167,9 @@ int32_t ffz_fuzzy_optimal(ffz_matcher *m, ffz_str hay, ffz_str needle,
                           ffz_indices *out);
 int32_t ffz_fuzzy_greedy(ffz_matcher *m, ffz_str hay, ffz_str needle,
                          size_t start, size_t end, ffz_indices *out);
+// 2-row rolling Smith-Waterman DP (FAST mode, score-only, no backtracking).
+int32_t ffz_fuzzy_rolling(ffz_matcher *m, ffz_str hay, ffz_str needle,
+                          size_t start, size_t end);
 
 // --- prefilter (ffz_prefilter.c) -----------------------------------------
 // Find (start, greedy_end, end) bounds for a subsequence match. Returns false

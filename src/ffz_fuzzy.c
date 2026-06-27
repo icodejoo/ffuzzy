@@ -214,3 +214,95 @@ int32_t ffz_fuzzy_optimal(ffz_matcher *m, ffz_str hay, ffz_str needle,
     }
     return (int32_t)best;
 }
+
+// --- 2-row rolling DP (FAST scoring mode) --------------------------------
+// Uses simplified bonuses (ffz_fast_bonus) and O(W) scratch instead of the
+// full needle_len×W matrix. Score-only: never fills indices.
+//
+// Recurrences (H = match track, C = gap/skip track, lagged by 1 column):
+//   H[k][i] = max(H[k-1][i-1] + max(b, CONSECUTIVE),   // consecutive
+//                 C[k][i-1]   + b)                       // after gap
+//             + SCORE_MATCH   (when hay[i] == needle[k])
+//   C[k][i] = max(H[k-1][i-1] - GAP_START,
+//                 C[k][i-1]   - GAP_EXTENSION)
+// C[k][i] is computed during the scan and feeds column i+1 via pprev_c.
+int32_t ffz_fuzzy_rolling(ffz_matcher *m, ffz_str hay, ffz_str needle,
+                          size_t start, size_t end) {
+    const ffz_config *cfg = &m->cfg;
+    size_t W = end - start;
+    size_t nl = needle.len;
+
+    if (!ffz_matcher_reserve(m, W, 1)) return -1;  // OOM
+
+    uint16_t *H_prev = m->roll;                 // row k-1
+    uint16_t *H_curr = m->roll + m->cap_hay;    // row k
+
+    // Normalize window and precompute fast bonuses.
+    ffz_char_class prev_cls =
+        start > 0 ? ffz_char_class_of(ffz_at(hay, start - 1), cfg)
+                  : cfg->initial_char_class;
+    for (size_t i = 0; i < W; i++) {
+        uint32_t c;
+        ffz_char_class cls =
+            ffz_class_and_normalize(ffz_at(hay, start + i), cfg, &c);
+        m->hay[i]   = c;
+        m->bonus[i] = ffz_fast_bonus(prev_cls, cls);
+        prev_cls    = cls;
+    }
+
+    // Row 0: match needle[0].
+    uint32_t nd0 = ffz_at(needle, 0);
+    for (size_t i = 0; i < W; i++) {
+        H_prev[i] = (m->hay[i] == nd0)
+            ? (uint16_t)(m->bonus[i] * FFZ_BONUS_FIRST_CHAR_MULTIPLIER +
+                         FFZ_SCORE_MATCH)
+            : 0;
+    }
+
+    // Rows 1 .. nl-1.
+    for (size_t k = 1; k < nl; k++) {
+        uint32_t ndk = ffz_at(needle, k);
+        uint16_t pprev_c = 0;  // C[k][i-1] (gap score from the previous column)
+
+        for (size_t i = 0; i < W; i++) {
+            uint16_t new_h = 0;
+            if (m->hay[i] == ndk) {
+                uint8_t b = m->bonus[i];
+                // Consecutive path: from H[k-1][i-1].
+                if (i > 0 && H_prev[i - 1]) {
+                    uint8_t cb = b > FFZ_BONUS_CONSECUTIVE
+                                     ? b
+                                     : (uint8_t)FFZ_BONUS_CONSECUTIVE;
+                    new_h = (uint16_t)(H_prev[i - 1] + cb + FFZ_SCORE_MATCH);
+                }
+                // Gap path: from C[k][i-1] = pprev_c.
+                if (pprev_c) {
+                    uint16_t g = (uint16_t)(pprev_c + b + FFZ_SCORE_MATCH);
+                    if (g > new_h) new_h = g;
+                }
+            }
+            H_curr[i] = new_h;
+
+            // Compute C[k][i] (for use at column i+1 as pprev_c).
+            uint16_t new_c = 0;
+            if (i > 0 && H_prev[i - 1] > FFZ_PENALTY_GAP_START)
+                new_c = (uint16_t)(H_prev[i - 1] - FFZ_PENALTY_GAP_START);
+            if (pprev_c > FFZ_PENALTY_GAP_EXTENSION) {
+                uint16_t ext =
+                    (uint16_t)(pprev_c - FFZ_PENALTY_GAP_EXTENSION);
+                if (ext > new_c) new_c = ext;
+            }
+            pprev_c = new_c;
+        }
+        // Rotate rows.
+        uint16_t *tmp = H_prev;
+        H_prev = H_curr;
+        H_curr = tmp;
+    }
+
+    // Find best score in the final row.
+    uint16_t best = 0;
+    for (size_t i = 0; i < W; i++)
+        if (H_prev[i] > best) best = H_prev[i];
+    return best ? (int32_t)best : -1;
+}

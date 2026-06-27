@@ -19,6 +19,7 @@ void ffz_matcher_free(ffz_matcher *m) {
     free(m->bonus);
     free(m->mgrid);
     free(m->pmat);
+    free(m->roll);
     free(m);
 }
 
@@ -39,6 +40,9 @@ bool ffz_matcher_reserve(ffz_matcher *m, size_t width, size_t needle_len) {
         uint8_t *b = (uint8_t *)realloc(m->bonus, nc);
         if (!b) return false;
         m->bonus = b;
+        uint16_t *rl = (uint16_t *)realloc(m->roll, nc * 2 * sizeof(uint16_t));
+        if (!rl) return false;
+        m->roll = rl;
         m->cap_hay = nc;
     }
     size_t need = width * needle_len;  // bounded < FFZ_MAX_MATRIX_SIZE by caller

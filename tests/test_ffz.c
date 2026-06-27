@@ -468,6 +468,27 @@ static void test_determinism_corners(void) {
     ffz_corpus_free(c);
 }
 
+static void test_rolling_dp(void) {
+    ffz_config cfg = ffz_config_default();
+    cfg.scoring_mode = FFZ_SCORE_FAST;
+    ffz_matcher *m = ffz_matcher_new(cfg);
+
+    // FAST mode: fuzzy match returns a positive score.
+    int32_t s = score(m, "cfg", "ffz_config", NULL, FFZ_FUZZY);
+    CHECK(s > 0, "rolling: fuzzy match gives positive score");
+
+    // No match returns -1.
+    int32_t s2 = score(m, "xyz", "abcdef", NULL, FFZ_FUZZY);
+    CHECK(s2 < 0, "rolling: no-match gives -1");
+
+    // Boundary match scores higher than interior (cfg at start vs preceded by letter).
+    int32_t sb = score(m, "cfg", "cfg_helper", NULL, FFZ_FUZZY);
+    int32_t si = score(m, "cfg", "abcfgval", NULL, FFZ_FUZZY);
+    CHECK(sb > si, "rolling: boundary match scores higher than interior");
+
+    ffz_matcher_free(m);
+}
+
 int main(void) {
     ffz_matcher *m = ffz_matcher_new(ffz_config_default());
     test_basic(m);
@@ -486,6 +507,7 @@ int main(void) {
     test_property();
     test_determinism_corners();
     test_corpus_clear_limit();
+    test_rolling_dp();
 
     printf("\n%d/%d checks passed\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
