@@ -137,7 +137,15 @@ int ffz_install_crash_handler(const char *breadcrumb_path) {
 #include <signal.h>
 #include <unistd.h>
 #include <dlfcn.h>
+// Apple's <ucontext.h> #errors unless _XOPEN_SOURCE is set — but setting that
+// would hide the non-POSIX backtrace() we rely on. <sys/ucontext.h> exposes the
+// same ucontext_t/mcontext types without the guard. Elsewhere <ucontext.h> +
+// _GNU_SOURCE (set at top of file) is what surfaces gregs[REG_RIP].
+#if defined(__APPLE__)
+#include <sys/ucontext.h>
+#else
 #include <ucontext.h>
+#endif
 
 #if defined(__ANDROID__)
 #include <unwind.h>
