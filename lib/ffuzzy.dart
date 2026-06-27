@@ -442,7 +442,9 @@ class FuzzyCorpus implements Finalizable {
     final r =
         lib.filterEx(ptr, u.ptr, u.len, mode, cm, nm, par, threads, limit);
     malloc.free(u.ptr);
-    if (r == nullptr) throw const FuzzyException('filter failed (out of memory)');
+    if (r == nullptr) {
+      throw const FuzzyException('filter failed (out of memory)');
+    }
     final n = lib.rLen(r);
     final out = <FuzzyHit>[];
     for (var i = 0; i < n; i++) {
