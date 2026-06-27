@@ -468,6 +468,58 @@ static void test_determinism_corners(void) {
     ffz_corpus_free(c);
 }
 
+static void test_scoring_modes(void) {
+    // --- FAST mode ---
+    ffz_config cfgf = ffz_config_default();
+    cfgf.scoring_mode = FFZ_SCORE_FAST;
+    ffz_matcher *mf = ffz_matcher_new(cfgf);
+
+    CHECK(score(mf, "cfg", "ffz_config", NULL, FFZ_FUZZY) > 0,
+          "FAST fuzzy: positive score on match");
+    CHECK(score(mf, "xyz", "abcdef", NULL, FFZ_FUZZY) < 0,
+          "FAST fuzzy: -1 on no match");
+    ffz_indices ix = {0};
+    int32_t sf = score(mf, "ab", "abcdef", &ix, FFZ_FUZZY);
+    CHECK(sf > 0, "FAST fuzzy: positive score with indices");
+    CHECK(ix.len == 2, "FAST fuzzy: index count == needle length");
+    ffz_indices_free(&ix);
+    CHECK(score(mf, "abc", "abcdef", NULL, FFZ_EXACT) < 0,
+          "FAST exact: whole-string mismatch -> -1");
+    CHECK(score(mf, "abc", "abc", NULL, FFZ_EXACT) > 0,
+          "FAST exact: exact whole-string match -> positive");
+
+    ffz_matcher_free(mf);
+
+    // --- OFF mode ---
+    ffz_config cfgo = ffz_config_default();
+    cfgo.scoring_mode = FFZ_SCORE_OFF;
+    ffz_matcher *mo = ffz_matcher_new(cfgo);
+
+    CHECK(score(mo, "cfg", "ffz_config", NULL, FFZ_FUZZY) == 0,
+          "OFF fuzzy: score is 0 on match");
+    CHECK(score(mo, "xyz", "abcdef", NULL, FFZ_FUZZY) < 0,
+          "OFF fuzzy: -1 on no match");
+    ffz_indices ix2 = {0};
+    int32_t so = score(mo, "ab", "abcdef", &ix2, FFZ_FUZZY);
+    CHECK(so == 0, "OFF fuzzy: score is 0 when indices requested");
+    CHECK(ix2.len == 2, "OFF fuzzy: index count == needle length");
+    ffz_indices_free(&ix2);
+    CHECK(score(mo, "abc", "abc", NULL, FFZ_EXACT) == 0,
+          "OFF exact: score is 0");
+    CHECK(score(mo, "abc", "abcd", NULL, FFZ_EXACT) < 0,
+          "OFF exact: -1 on length mismatch");
+
+    ffz_matcher_free(mo);
+
+    // --- NUCLEO mode (current behaviour unchanged) ---
+    ffz_config cfgn = ffz_config_default();
+    cfgn.scoring_mode = FFZ_SCORE_NUCLEO;
+    ffz_matcher *mn = ffz_matcher_new(cfgn);
+    CHECK(score(mn, "cfg", "ffz_config", NULL, FFZ_FUZZY) > 0,
+          "NUCLEO fuzzy: positive score");
+    ffz_matcher_free(mn);
+}
+
 static void test_rolling_dp(void) {
     ffz_config cfg = ffz_config_default();
     cfg.scoring_mode = FFZ_SCORE_FAST;
@@ -507,6 +559,7 @@ int main(void) {
     test_property();
     test_determinism_corners();
     test_corpus_clear_limit();
+    test_scoring_modes();
     test_rolling_dp();
 
     printf("\n%d/%d checks passed\n", g_total - g_fail, g_total);

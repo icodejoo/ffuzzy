@@ -207,16 +207,10 @@ static int32_t substring_match(ffz_matcher *m, ffz_str hay, ffz_str needle,
 }
 
 // --- top-level dispatch ---------------------------------------------------
-int32_t ffz_match(ffz_matcher *m, ffz_str haystack, ffz_str needle,
-                  ffz_mode mode, ffz_indices *out) {
+static int32_t ffz_match_impl(ffz_matcher *m, ffz_str haystack, ffz_str needle,
+                              ffz_mode mode, ffz_indices *out) {
     const ffz_config *cfg = &m->cfg;
     size_t hn = haystack.len, nl = needle.len;
-
-    if (nl == 0) return 0;
-    // ASCII haystack vs Unicode needle: no byte can equal a non-ASCII codepoint.
-    if (haystack.b && !needle.b) return -1;
-    // Needle longer than the haystack can never match in any mode.
-    if (nl > hn) return -1;
 
     switch (mode) {
         case FFZ_EXACT: {
@@ -242,8 +236,9 @@ int32_t ffz_match(ffz_matcher *m, ffz_str haystack, ffz_str needle,
 
         case FFZ_FUZZY:
         default: {
-            if (nl == hn) return exact_impl(m, haystack, needle, 0, hn, out);
-            if (nl == 1) {  // single char: best-bonus occurrence
+            if (nl == hn)
+                return exact_impl(m, haystack, needle, 0, hn, out);
+            if (nl == 1) {
                 long pos = substring_best(m, haystack, needle);
                 if (pos < 0) return -1;
                 return (int32_t)ffz_calculate_score(m, haystack, needle,
@@ -253,11 +248,42 @@ int32_t ffz_match(ffz_matcher *m, ffz_str haystack, ffz_str needle,
             if (!ffz_prefilter(cfg, haystack, needle, false, &start, &greedy_end,
                                &end))
                 return -1;
-            if (nl == end - start)  // contiguous run -> score directly
+            if (nl == end - start)
                 return (int32_t)ffz_calculate_score(m, haystack, needle, start,
                                                     start + nl, out);
-            return ffz_fuzzy_optimal(m, haystack, needle, start, greedy_end, end,
-                                     out);
+            switch (cfg->scoring_mode) {
+                case FFZ_SCORE_OFF:
+                    if (out)
+                        ffz_calculate_score(m, haystack, needle, start,
+                                            greedy_end, out);
+                    return 0;
+                case FFZ_SCORE_FAST:
+                    if (!out)
+                        return ffz_fuzzy_rolling(m, haystack, needle, start, end);
+                    return ffz_fuzzy_greedy(m, haystack, needle, start, greedy_end,
+                                           out);
+                default: /* FFZ_SCORE_NUCLEO */
+                    return ffz_fuzzy_optimal(m, haystack, needle, start, greedy_end,
+                                            end, out);
+            }
         }
     }
+}
+
+int32_t ffz_match(ffz_matcher *m, ffz_str haystack, ffz_str needle,
+                  ffz_mode mode, ffz_indices *out) {
+    const ffz_config *cfg = &m->cfg;
+    size_t hn = haystack.len, nl = needle.len;
+
+    if (nl == 0) return 0;
+    // ASCII haystack vs Unicode needle: no byte can equal a non-ASCII codepoint.
+    if (haystack.b && !needle.b) return -1;
+    // Needle longer than the haystack can never match in any mode.
+    if (nl > hn) return -1;
+
+    int32_t s = ffz_match_impl(m, haystack, needle, mode, out);
+
+    // OFF mode: suppress non-zero score (FUZZY OFF already returns 0 directly).
+    if (s > 0 && cfg->scoring_mode == FFZ_SCORE_OFF) return 0;
+    return s;
 }
