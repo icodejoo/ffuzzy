@@ -124,7 +124,7 @@ verifies its range compression is lossless before writing.
 index-layer feature: the host generates alternate search keys (the dictionary
 stays host-side) and the matcher just matches more strings. From **C** you can
 register a `ffz_transliterator` callback (`ffz_corpus.h`) invoked per item; from
-**Dart** the equivalent is `FfzCorpus.addKeyed(item, [FfzKey(...)])` — you
+**Dart** the equivalent is `FuzzyCorpus.addKeyed(item, [FuzzyKey(...)])` — you
 compute the keys host-side and pass them in (the C function-pointer hook isn't
 bridged over FFI). A hit reports which key matched via `matchedKind`/`matchedKey`.
 
@@ -191,7 +191,7 @@ serial + parallel corpus lifecycles — so missing or late frees fail loudly.
 Two failure classes, handled differently:
 
 - **Recoverable errors are catchable in Dart.** Library-load/symbol failures and
-  out-of-memory in `filter` surface as `FfzException`; misuse (e.g. use after
+  out-of-memory in `filter` surface as `FuzzyException`; misuse (e.g. use after
   `dispose`) throws `StateError`. The engine is hardened to *degrade, not crash*:
   allocations drop-on-OOM, scratch is bounded, no recursion, invalid UTF-8 →
   U+FFFD. Wrap calls in `try/catch` for an actionable Dart error.
@@ -218,15 +218,15 @@ locatable build. iOS/macOS use Xcode's per-config defaults + `.dSYM`.)
 
 ### Crash handler (debug/profile by default)
 
-`FfzCrash.install()` registers a last-gasp handler (POSIX `sigaction` /
+`FuzzyCrash.install()` registers a last-gasp handler (POSIX `sigaction` /
 Windows `SetUnhandledExceptionFilter`) that, on a fault, writes a backtrace to
 stderr (logcat on Android) and optionally a breadcrumb file, then re-raises so
 your OS crash reporter still fires. It never pretends to recover.
 
 ```dart
-final report = FfzCrash.lastReport();          // previous run's crash, if any
+final report = FuzzyCrash.lastReport();          // previous run's crash, if any
 if (report != null) log('ffz last crash:\n$report');
-FfzCrash.install(breadcrumbPath: '${dir.path}/ffz_crash.log');
+FuzzyCrash.install(breadcrumbPath: '${dir.path}/ffz_crash.log');
 ```
 
 A verified debug (MSVC+PDB) crash prints the faulting line directly:
@@ -240,7 +240,7 @@ A verified debug (MSVC+PDB) crash prints the faulting line directly:
 The handler is **only compiled into debug/profile** builds: walking the stack
 in-process needs `.eh_frame` unwind tables across the whole library, which would
 inflate the stripped release `.so` from ~32 KB to ~58 KB. A plain release lib
-therefore omits it (`FfzCrash.install()` returns `false`) and you diagnose
+therefore omits it (`FuzzyCrash.install()` returns `false`) and you diagnose
 release crashes from the OS tombstone + the shipped `libffz.so.debug` /
 `.pdb` / `.dSYM` sidecar (`ndk-stack`/`addr2line`/Crashlytics-NDK). To force the
 in-process handler into release anyway, build with `-DFFZ_CRASH_IN_RELEASE=ON`

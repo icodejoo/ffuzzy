@@ -1,19 +1,19 @@
 /// ffuzzy — idiomatic Dart binding for the compact C fuzzy matcher, via dart:ffi.
 ///
 /// ```dart
-/// final corpus = FfzCorpus();                  // or matchPaths/preferPrefix
+/// final corpus = FuzzyCorpus();                  // or matchPaths/preferPrefix
 /// corpus.addAll(['src/main.rs', 'lib/ffz.dart', '中文搜索']);
 /// final hits = corpus.filter('src', parallel: true, limit: 50);
 /// for (final h in hits) {
-///   final u16 = ffzCodepointToUtf16('src/main.rs', h.indices); // for TextSpan
+///   final u16 = fuzzyCodepointToUtf16('src/main.rs', h.indices); // for TextSpan
 ///   print('${h.index}  score=${h.score}  kind=${h.matchedKind}  $u16');
 /// }
 /// corpus.dispose();                             // or rely on the NativeFinalizer
 /// ```
 ///
 /// NOTE: every call is synchronous and runs on the calling isolate; for a large
-/// corpus, create and use the `FfzCorpus` on a background isolate so `filter`
-/// does not jank the UI. An `FfzCorpus` must only be used on the isolate that
+/// corpus, create and use the `FuzzyCorpus` on a background isolate so `filter`
+/// does not jank the UI. An `FuzzyCorpus` must only be used on the isolate that
 /// created it (it owns a native pointer).
 library;
 
@@ -32,75 +32,75 @@ import 'package:ffi/ffi.dart';
 /// `perf/PERF.md` calls "word"). The other modes treat the whole query as one
 /// literal atom: [substring]/[prefix]/[postfix] match a contiguous run, [exact]
 /// matches the whole string.
-enum FfzMode { fuzzy, substring, prefix, postfix, exact }
+enum FuzzyMode { fuzzy, substring, prefix, postfix, exact }
 
 /// Case handling (mirrors `ffz_case_matching`).
-enum FfzCase { respect, ignore, smart }
+enum FuzzyCase { respect, ignore, smart }
 
 /// Unicode normalization (mirrors `ffz_normalization`).
-enum FfzNorm { never, smart }
+enum FuzzyNorm { never, smart }
 
 /// Which key produced a hit. Custom host kinds use values >= 100.
-enum FfzKeyKind { original, pinyin, initials, romaji, custom }
+enum FuzzyKeyKind { original, pinyin, initials, romaji, custom }
 
 /// The raw C `ffz_key_kind` code for a kind (original=0..romaji=3, custom=100).
-extension FfzKeyKindCode on FfzKeyKind {
+extension FuzzyKeyKindCode on FuzzyKeyKind {
   int get code => switch (this) {
-        FfzKeyKind.original => 0,
-        FfzKeyKind.pinyin => 1,
-        FfzKeyKind.initials => 2,
-        FfzKeyKind.romaji => 3,
-        FfzKeyKind.custom => 100,
+        FuzzyKeyKind.original => 0,
+        FuzzyKeyKind.pinyin => 1,
+        FuzzyKeyKind.initials => 2,
+        FuzzyKeyKind.romaji => 3,
+        FuzzyKeyKind.custom => 100,
       };
 }
 
 /// An alternate search key for an item (e.g. host-computed pinyin/romaji), for
-/// [FfzCorpus.addKeyed]. [kind] is a [FfzKeyKind] code (use `FfzKeyKind.x.code`)
+/// [FuzzyCorpus.addKeyed]. [kind] is a [FuzzyKeyKind] code (use `FuzzyKeyKind.x.code`)
 /// or any host-defined value >= 100.
-class FfzKey {
+class FuzzyKey {
   final String text;
   final int kind;
-  const FfzKey(this.text, {this.kind = 1 /* pinyin */});
-  FfzKey.kind(this.text, FfzKeyKind kind) : kind = kind.code;
+  const FuzzyKey(this.text, {this.kind = 1 /* pinyin */});
+  FuzzyKey.kind(this.text, FuzzyKeyKind kind) : kind = kind.code;
 }
 
-FfzKeyKind _kindOf(int v) => switch (v) {
-      0 => FfzKeyKind.original,
-      1 => FfzKeyKind.pinyin,
-      2 => FfzKeyKind.initials,
-      3 => FfzKeyKind.romaji,
-      _ => FfzKeyKind.custom,
+FuzzyKeyKind _kindOf(int v) => switch (v) {
+      0 => FuzzyKeyKind.original,
+      1 => FuzzyKeyKind.pinyin,
+      2 => FuzzyKeyKind.initials,
+      3 => FuzzyKeyKind.romaji,
+      _ => FuzzyKeyKind.custom,
     };
 
 /// Thrown when the native library can't be loaded or a symbol is missing.
-class FfzException implements Exception {
+class FuzzyException implements Exception {
   final String message;
-  const FfzException(this.message);
+  const FuzzyException(this.message);
   @override
-  String toString() => 'FfzException: $message';
+  String toString() => 'FuzzyException: $message';
 }
 
 /// One search result. [index] is the item's insertion order; [indices] are the
 /// matched **codepoint** positions within the matched key — use
-/// [ffzCodepointToUtf16] before applying them to a Dart `String`.
-class FfzHit {
+/// [fuzzyCodepointToUtf16] before applying them to a Dart `String`.
+class FuzzyHit {
   final int index;
   final int score;
-  final FfzKeyKind matchedKind;
+  final FuzzyKeyKind matchedKind;
   final int matchedKey; // which key of the item matched (0 == original)
   final List<int> indices;
-  const FfzHit(
+  const FuzzyHit(
       this.index, this.score, this.matchedKind, this.matchedKey, this.indices);
 
   @override
   String toString() =>
-      'FfzHit(index: $index, score: $score, kind: $matchedKind)';
+      'FuzzyHit(index: $index, score: $score, kind: $matchedKind)';
 }
 
-/// Convert codepoint indices (as in [FfzHit.indices]) to UTF-16 code-unit
+/// Convert codepoint indices (as in [FuzzyHit.indices]) to UTF-16 code-unit
 /// offsets into [text], suitable for Dart `String`/`TextSpan` highlighting.
 /// (Dart strings are UTF-16; astral chars/emoji occupy two code units.)
-List<int> ffzCodepointToUtf16(String text, List<int> codepointIndices) {
+List<int> fuzzyCodepointToUtf16(String text, List<int> codepointIndices) {
   if (codepointIndices.isEmpty) return const <int>[];
   final offsets = <int>[];
   var u16 = 0;
@@ -237,7 +237,7 @@ class _Lib {
       if (Platform.isIOS || Platform.isMacOS) return DynamicLibrary.process();
       return DynamicLibrary.open('libffz.so');
     } on ArgumentError catch (e) {
-      throw FfzException('failed to load ffz native library: $e');
+      throw FuzzyException('failed to load ffz native library: $e');
     }
   }
 }
@@ -255,17 +255,17 @@ extension on String {
 
 /// A resident corpus of items that can be fuzzy/substring/prefix/etc. filtered.
 /// Release with [dispose], or rely on the [NativeFinalizer] on GC.
-class FfzCorpus implements Finalizable {
+class FuzzyCorpus implements Finalizable {
   /// [matchPaths] tunes delimiters for path-like text; [preferPrefix] biases
   /// scoring toward matches near the start. [libraryPath] loads a specific
   /// native library file (tests / non-bundled use).
-  FfzCorpus(
+  FuzzyCorpus(
       {bool matchPaths = false, bool preferPrefix = false, String? libraryPath})
       : _l = _Lib.resolve(libraryPath),
         _libPath = libraryPath {
     _ptr = _l.newCfg(matchPaths ? 1 : 0, preferPrefix ? 1 : 0);
     if (_ptr == nullptr) {
-      throw const FfzException('ffz_ffi_new_cfg returned null');
+      throw const FuzzyException('ffz_ffi_new_cfg returned null');
     }
     _l.finalizer.attach(this, _ptr.cast(), detach: this);
   }
@@ -277,7 +277,7 @@ class FfzCorpus implements Finalizable {
   int _inFlight = 0; // pending filterAsync calls reading the native corpus
 
   void _check() {
-    if (_disposed) throw StateError('FfzCorpus used after dispose()');
+    if (_disposed) throw StateError('FuzzyCorpus used after dispose()');
   }
 
   // Mutating/freeing the corpus while a filterAsync reads it from a worker
@@ -286,7 +286,7 @@ class FfzCorpus implements Finalizable {
     _check();
     if (_inFlight > 0) {
       throw StateError(
-          'FfzCorpus mutated while $_inFlight filterAsync call(s) in flight');
+          'FuzzyCorpus mutated while $_inFlight filterAsync call(s) in flight');
     }
   }
 
@@ -307,18 +307,18 @@ class FfzCorpus implements Finalizable {
   /// Add [item] with explicit alternate search [keys] — e.g. host-computed
   /// pinyin/romaji/initials, so a CJK item is findable by typing latin. The
   /// ORIGINAL key (the item text) is added automatically. A hit reports which
-  /// key matched via [FfzHit.matchedKind]/[FfzHit.matchedKey].
+  /// key matched via [FuzzyHit.matchedKind]/[FuzzyHit.matchedKey].
   /// ```dart
   /// corpus.addKeyed('张三', [
-  ///   FfzKey.kind('zhangsan', FfzKeyKind.pinyin),
-  ///   FfzKey.kind('zs', FfzKeyKind.initials),
+  ///   FuzzyKey.kind('zhangsan', FuzzyKeyKind.pinyin),
+  ///   FuzzyKey.kind('zs', FuzzyKeyKind.initials),
   /// ]);
   /// ```
-  void addKeyed(String item, List<FfzKey> keys) {
+  void addKeyed(String item, List<FuzzyKey> keys) {
     _checkMutate();
     final f = _l.addKeyed;
     if (f == null) {
-      throw const FfzException('ffz_ffi_add_keyed missing in native library');
+      throw const FuzzyException('ffz_ffi_add_keyed missing in native library');
     }
     final iu = item._toUtf8();
     final n = keys.length;
@@ -368,11 +368,11 @@ class FfzCorpus implements Finalizable {
   /// CPUs capped at 8; a hard ceiling of cpu-1 always applies; corpora < 512
   /// items run single-threaded). [limit] == 0 returns all matches.
   /// [highlight] false skips reading match indices.
-  List<FfzHit> filter(
+  List<FuzzyHit> filter(
     String query, {
-    FfzMode mode = FfzMode.fuzzy,
-    FfzCase caseMatching = FfzCase.smart,
-    FfzNorm normalization = FfzNorm.smart,
+    FuzzyMode mode = FuzzyMode.fuzzy,
+    FuzzyCase caseMatching = FuzzyCase.smart,
+    FuzzyNorm normalization = FuzzyNorm.smart,
     bool parallel = false,
     int threads = 0,
     int limit = 0,
@@ -394,11 +394,11 @@ class FfzCorpus implements Finalizable {
   /// use-after-free). Awaiting the returned future also keeps this corpus alive
   /// across the call, so the finalizer can't free it mid-scan — but do keep a
   /// reference and don't drop the future if you rely on that.
-  Future<List<FfzHit>> filterAsync(
+  Future<List<FuzzyHit>> filterAsync(
     String query, {
-    FfzMode mode = FfzMode.fuzzy,
-    FfzCase caseMatching = FfzCase.smart,
-    FfzNorm normalization = FfzNorm.smart,
+    FuzzyMode mode = FuzzyMode.fuzzy,
+    FuzzyCase caseMatching = FuzzyCase.smart,
+    FuzzyNorm normalization = FuzzyNorm.smart,
     bool parallel = false,
     int threads = 0,
     int limit = 0,
@@ -425,9 +425,9 @@ class FfzCorpus implements Finalizable {
     }
   }
 
-  // Shared native call + result read, usable on any isolate (the FfzHit list it
+  // Shared native call + result read, usable on any isolate (the FuzzyHit list it
   // returns is sendable). `ptr` must be a live corpus in this process.
-  static List<FfzHit> _filterWith(
+  static List<FuzzyHit> _filterWith(
       _Lib lib,
       Pointer<Void> ptr,
       String query,
@@ -442,16 +442,16 @@ class FfzCorpus implements Finalizable {
     final r =
         lib.filterEx(ptr, u.ptr, u.len, mode, cm, nm, par, threads, limit);
     malloc.free(u.ptr);
-    if (r == nullptr) throw const FfzException('filter failed (out of memory)');
+    if (r == nullptr) throw const FuzzyException('filter failed (out of memory)');
     final n = lib.rLen(r);
-    final out = <FfzHit>[];
+    final out = <FuzzyHit>[];
     for (var i = 0; i < n; i++) {
       List<int> idx = const [];
       if (highlight) {
         final ni = lib.rNIdx(r, i);
         idx = List<int>.generate(ni, (j) => lib.rIdx(r, i, j), growable: false);
       }
-      out.add(FfzHit(lib.rItem(r, i), lib.rScore(r, i),
+      out.add(FuzzyHit(lib.rItem(r, i), lib.rScore(r, i),
           _kindOf(lib.rKind(r, i)), lib.rKey(r, i), idx));
     }
     lib.rFree(r);
@@ -465,7 +465,7 @@ class FfzCorpus implements Finalizable {
     if (_disposed) return;
     if (_inFlight > 0) {
       throw StateError(
-          'FfzCorpus.dispose() with $_inFlight filterAsync call(s) in flight');
+          'FuzzyCorpus.dispose() with $_inFlight filterAsync call(s) in flight');
     }
     _disposed = true;
     _l.finalizer.detach(this);
@@ -475,7 +475,7 @@ class FfzCorpus implements Finalizable {
 
 /// Optional native crash handler for **non-recoverable** faults.
 ///
-/// Recoverable errors already surface as [FfzException]/[StateError] and are
+/// Recoverable errors already surface as [FuzzyException]/[StateError] and are
 /// catchable. A genuine native fault (segfault / abort) cannot be turned into a
 /// Dart exception — `dart:ffi` has no such mechanism and the process dies.
 /// Installing this handler makes that death *diagnosable*: it prints a
@@ -491,16 +491,16 @@ class FfzCorpus implements Finalizable {
 /// This is opt-in (it installs process-wide signal handlers; call it once at
 /// startup, before your other crash reporter if you chain them):
 /// ```dart
-/// final report = FfzCrash.lastReport();      // previous run's crash, if any
+/// final report = FuzzyCrash.lastReport();      // previous run's crash, if any
 /// if (report != null) log('ffz last crash:\n$report');
-/// FfzCrash.install(breadcrumbPath: '${dir.path}/ffz_crash.log');
+/// FuzzyCrash.install(breadcrumbPath: '${dir.path}/ffz_crash.log');
 /// ```
-class FfzCrash {
-  FfzCrash._();
+class FuzzyCrash {
+  FuzzyCrash._();
   static String? _path;
 
   /// Install the handler. [breadcrumbPath] (optional) receives the backtrace of
-  /// the next crash. [libraryPath] mirrors [FfzCorpus]. Returns true if the
+  /// the next crash. [libraryPath] mirrors [FuzzyCorpus]. Returns true if the
   /// native handler was installed (false if the library lacks the symbol).
   static bool install({String? breadcrumbPath, String? libraryPath}) {
     final f = _Lib.resolve(libraryPath).installCrash;

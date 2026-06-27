@@ -4,7 +4,7 @@
 import 'package:flutter/material.dart';
 import 'package:ffuzzy/ffuzzy.dart';
 
-void main() => runApp(const FfzDemoApp());
+void main() => runApp(const FuzzyDemoApp());
 
 const _items = <String>[
   'lib/src/widgets/scaffold.dart',
@@ -17,8 +17,8 @@ const _items = <String>[
   'src/main.rs',
 ];
 
-class FfzDemoApp extends StatelessWidget {
-  const FfzDemoApp({super.key});
+class FuzzyDemoApp extends StatelessWidget {
+  const FuzzyDemoApp({super.key});
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'ffz demo',
@@ -34,18 +34,18 @@ class SearchPage extends StatefulWidget {
 }
 
 class _SearchPageState extends State<SearchPage> {
-  late final FfzCorpus _corpus;
-  List<FfzHit> _hits = const [];
+  late final FuzzyCorpus _corpus;
+  List<FuzzyHit> _hits = const [];
 
   @override
   void initState() {
     super.initState();
-    _corpus = FfzCorpus(matchPaths: true);
+    _corpus = FuzzyCorpus(matchPaths: true);
     _corpus.addAll(_items);
     // Index the CJK item by host-computed pinyin/initials so latin typing finds it.
     _corpus.addKeyed('中文搜索引擎', [
-      FfzKey.kind('zhongwensousuoyinqing', FfzKeyKind.pinyin),
-      FfzKey.kind('zwssyq', FfzKeyKind.initials),
+      FuzzyKey.kind('zhongwensousuoyinqing', FuzzyKeyKind.pinyin),
+      FuzzyKey.kind('zwssyq', FuzzyKeyKind.initials),
     ]);
     _search('');
   }
@@ -87,13 +87,13 @@ class _SearchPageState extends State<SearchPage> {
                 // matchedKey 0 == the original item; only highlight then.
                 final text = _items[hit.index];
                 final highlight = hit.matchedKey == 0
-                    ? ffzCodepointToUtf16(text, hit.indices).toSet()
+                    ? fuzzyCodepointToUtf16(text, hit.indices).toSet()
                     : const <int>{};
                 return ListTile(
                   dense: true,
                   title: _Highlighted(text, highlight),
                   trailing: Text('${hit.score}'),
-                  subtitle: hit.matchedKind == FfzKeyKind.original
+                  subtitle: hit.matchedKind == FuzzyKeyKind.original
                       ? null
                       : Text('via ${hit.matchedKind.name}'),
                 );

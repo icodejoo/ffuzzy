@@ -8,8 +8,8 @@ and retained only for performance comparison under `benchmark/`.
 
 - **Breaking — engine and API replaced.** The Rust-era API (`FuzzyMatcher`,
   `FuzzyStringMatcher`, `fuzzyMatch`, …) is gone. Use the C-engine API:
-  `FfzCorpus` + `filter`/`filterAsync`, `FfzHit`, `FfzMode`/`FfzCase`/`FfzNorm`,
-  `FfzKey`/`addKeyed`, `ffzCodepointToUtf16`, `FfzException`, `FfzCrash`. See the
+  `FuzzyCorpus` + `filter`/`filterAsync`, `FuzzyHit`, `FuzzyMode`/`FuzzyCase`/`FuzzyNorm`,
+  `FuzzyKey`/`addKeyed`, `fuzzyCodepointToUtf16`, `FuzzyException`, `FuzzyCrash`. See the
   README for the full surface.
 - **No Rust toolchain required.** Native code is plain C, compiled and bundled
   per platform by the standard SDK; the previous precompiled-binary download
@@ -35,18 +35,18 @@ idiomatic Dart/Flutter FFI binding. C-only; no Rust dependency.
   in the exact build; CJK/Latin-fold/full-case-fold Unicode support.
 
 ### Corpus & API
-- Resident `FfzCorpus` with `add`/`addAll`/`addKeyed`/`clear`/`filter`.
+- Resident `FuzzyCorpus` with `add`/`addAll`/`addKeyed`/`clear`/`filter`.
 - `addKeyed` for host-computed alternate keys (pinyin/romaji/initials).
 - `filterAsync` runs the scan on a background isolate (UI never janks);
   overlapping calls are safe (per-call native matcher). Mutating a corpus while
   a `filterAsync` is in flight throws `StateError` (would be a use-after-free).
 - Optional multi-threaded scoring (off by default; auto = half the CPUs capped
   at 8; hard ceiling cpu-1). Results are deterministic and identical to serial.
-- `ffzCodepointToUtf16` to map match indices to UTF-16 offsets for highlighting.
+- `fuzzyCodepointToUtf16` to map match indices to UTF-16 offsets for highlighting.
 
 ### Build & diagnostics
 - Native debug/release split is automatic per Flutter mode: debug/profile keep
-  symbols + an optional in-process crash handler (`FfzCrash`); release is
+  symbols + an optional in-process crash handler (`FuzzyCrash`); release is
   stripped/small (~32 KB arm64) with a `.debug`/`.pdb`/`.dSYM` sidecar for
   offline symbolization. `FFZ_CRASH_IN_RELEASE` forces the handler into release.
 

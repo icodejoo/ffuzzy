@@ -34,7 +34,7 @@ dependencies:
 ```dart
 import 'package:ffuzzy/ffuzzy.dart';
 
-final corpus = FfzCorpus();
+final corpus = FuzzyCorpus();
 corpus.addAll(['src/main.dart', 'lib/widget.dart', 'README.md', '中文搜索']);
 
 final hits = corpus.filter('srcmn', parallel: true, limit: 50);
@@ -45,7 +45,7 @@ for (final h in hits) {
 corpus.dispose(); // or let the NativeFinalizer reclaim it on GC
 ```
 
-> An `FfzCorpus` owns native memory and must be used only on the isolate that
+> An `FuzzyCorpus` owns native memory and must be used only on the isolate that
 > created it. Every call is synchronous on the calling isolate — for a large
 > corpus either use [`filterAsync`](#filtering) or run the corpus on a background
 > isolate so `filter` doesn't jank the UI.
@@ -62,21 +62,21 @@ speed — especially large lists (tens of thousands of items) and CJK content.
 
 Everything is exported from `package:ffuzzy/ffuzzy.dart`.
 
-## `FfzCorpus`
+## `FuzzyCorpus`
 
 A resident corpus you build once and filter many times.
 
 ### Constructor
 
 ```dart
-FfzCorpus({
+FuzzyCorpus({
   bool matchPaths = false,   // tune delimiters for path-like text
   bool preferPrefix = false, // bias scoring toward matches near the start
   String? libraryPath,       // load a specific native lib (tests / non-bundled)
 })
 ```
 
-Throws [`FfzException`](#ffzexception) if the native library can't be loaded.
+Throws [`FuzzyException`](#fuzzyexception) if the native library can't be loaded.
 
 ### Building the corpus
 
@@ -84,18 +84,18 @@ Throws [`FfzException`](#ffzexception) if the native library can't be loaded.
 |---|---|
 | `void add(String item)` | Append one item. |
 | `void addAll(Iterable<String> items)` | Append many (insertion order is the item `index`). |
-| `void addKeyed(String item, List<FfzKey> keys)` | Append `item` with [alternate search keys](#multi-key--cjk-transliteration). The original text is added automatically. |
+| `void addKeyed(String item, List<FuzzyKey> keys)` | Append `item` with [alternate search keys](#multi-key--cjk-transliteration). The original text is added automatically. |
 | `int get length` | Number of items currently in the corpus. |
 | `void clear()` | Remove all items; the corpus stays usable. |
 
 ### Filtering
 
 ```dart
-List<FfzHit> filter(
+List<FuzzyHit> filter(
   String query, {
-  FfzMode mode = FfzMode.fuzzy,
-  FfzCase caseMatching = FfzCase.smart,
-  FfzNorm normalization = FfzNorm.smart,
+  FuzzyMode mode = FuzzyMode.fuzzy,
+  FuzzyCase caseMatching = FuzzyCase.smart,
+  FuzzyNorm normalization = FuzzyNorm.smart,
   bool parallel = false,
   int threads = 0,
   int limit = 0,        // 0 = return all matches
@@ -104,7 +104,7 @@ List<FfzHit> filter(
 ```
 
 ```dart
-Future<List<FfzHit>> filterAsync(String query, { /* same options */ })
+Future<List<FuzzyHit>> filterAsync(String query, { /* same options */ })
 ```
 
 `filterAsync` runs the native scan + result marshaling on a background isolate,
@@ -128,7 +128,7 @@ the serial path regardless of thread count.
 A `NativeFinalizer` frees the corpus automatically if you forget to `dispose`,
 but calling `dispose` is preferred for prompt release.
 
-## `FfzHit`
+## `FuzzyHit`
 
 One search result.
 
@@ -136,39 +136,39 @@ One search result.
 |---|---|---|
 | `index` | `int` | The item's insertion order in the corpus. |
 | `score` | `int` | Match score (higher is better). |
-| `matchedKind` | `FfzKeyKind` | Which kind of key matched (original / pinyin / …). |
+| `matchedKind` | `FuzzyKeyKind` | Which kind of key matched (original / pinyin / …). |
 | `matchedKey` | `int` | Which key of the item matched (`0` == original). |
-| `indices` | `List<int>` | Matched **codepoint** positions in the matched key — convert with [`ffzCodepointToUtf16`](#highlighting) before indexing a Dart `String`. |
+| `indices` | `List<int>` | Matched **codepoint** positions in the matched key — convert with [`fuzzyCodepointToUtf16`](#highlighting) before indexing a Dart `String`. |
 
 ## Enums
 
 ```dart
-enum FfzMode { fuzzy, substring, prefix, postfix, exact }
-enum FfzCase { respect, ignore, smart }   // case handling
-enum FfzNorm { never, smart }             // Unicode normalization (diacritics)
-enum FfzKeyKind { original, pinyin, initials, romaji, custom }
+enum FuzzyMode { fuzzy, substring, prefix, postfix, exact }
+enum FuzzyCase { respect, ignore, smart }   // case handling
+enum FuzzyNorm { never, smart }             // Unicode normalization (diacritics)
+enum FuzzyKeyKind { original, pinyin, initials, romaji, custom }
 ```
 
-- **`FfzMode.fuzzy`** also parses the query into space-separated terms and
+- **`FuzzyMode.fuzzy`** also parses the query into space-separated terms and
   fzf-style operators: `!` negate, `^` prefix, `'` substring, `$` suffix — so
   `'lib parse'` is an AND of two terms. The other modes treat the whole query as
   one literal atom.
-- **`FfzKeyKind`** has a `.code` getter (`original`=0 … `romaji`=3, `custom`=100)
-  for use with `FfzKey`.
+- **`FuzzyKeyKind`** has a `.code` getter (`original`=0 … `romaji`=3, `custom`=100)
+  for use with `FuzzyKey`.
 
 ## Highlighting
 
 ```dart
-List<int> ffzCodepointToUtf16(String text, List<int> codepointIndices)
+List<int> fuzzyCodepointToUtf16(String text, List<int> codepointIndices)
 ```
 
-`FfzHit.indices` are codepoint positions; Dart strings are UTF-16. Convert
+`FuzzyHit.indices` are codepoint positions; Dart strings are UTF-16. Convert
 before building a `TextSpan` so emoji / astral characters don't misalign:
 
 ```dart
 final hit = corpus.filter('src').first;
 final text = items[hit.index];
-final marks = ffzCodepointToUtf16(text, hit.indices).toSet();
+final marks = fuzzyCodepointToUtf16(text, hit.indices).toSet();
 final spans = [
   for (var i = 0; i < text.length; i++)
     TextSpan(
@@ -184,37 +184,37 @@ The matcher has no built-in pinyin/romaji dictionary — you compute alternate
 keys host-side and attach them, so a CJK item is findable by typing latin.
 
 ```dart
-class FfzKey {
-  const FfzKey(String text, {int kind = 1 /* pinyin */});
-  FfzKey.kind(String text, FfzKeyKind kind);
+class FuzzyKey {
+  const FuzzyKey(String text, {int kind = 1 /* pinyin */});
+  FuzzyKey.kind(String text, FuzzyKeyKind kind);
 }
 
 corpus.addKeyed('张三', [
-  FfzKey.kind('zhangsan', FfzKeyKind.pinyin),
-  FfzKey.kind('zs', FfzKeyKind.initials),
+  FuzzyKey.kind('zhangsan', FuzzyKeyKind.pinyin),
+  FuzzyKey.kind('zs', FuzzyKeyKind.initials),
 ]);
 
 final h = corpus.filter('zs').first;
-// h.matchedKind == FfzKeyKind.initials, h.matchedKey == 2
+// h.matchedKind == FuzzyKeyKind.initials, h.matchedKey == 2
 ```
 
 ## Errors
 
 - **Recoverable** errors are catchable: failed library/symbol load and
-  out-of-memory surface as `FfzException`; misuse (use after `dispose`, mutate
+  out-of-memory surface as `FuzzyException`; misuse (use after `dispose`, mutate
   while a `filterAsync` is in flight) throws `StateError`. The engine is hardened
   to degrade rather than crash (drop-on-OOM, bounded scratch, no recursion,
   invalid UTF-8 → U+FFFD).
 - **Hard native faults** (segfault/abort) can't become Dart exceptions — see
-  [`FfzCrash`](#ffzcrash).
+  [`FuzzyCrash`](#fuzzycrash).
 
-### `FfzException`
+### `FuzzyException`
 
 ```dart
-class FfzException implements Exception { final String message; }
+class FuzzyException implements Exception { final String message; }
 ```
 
-## `FfzCrash`
+## `FuzzyCrash`
 
 Optional, opt-in last-gasp handler for **non-recoverable** native faults. It
 prints a backtrace to stderr (logcat on Android) just before the process dies
@@ -223,11 +223,11 @@ and, with a `breadcrumbPath`, writes the same report to a file so you can show
 
 ```dart
 // previous run's crash, if any (also clears it)
-final report = FfzCrash.lastReport();
+final report = FuzzyCrash.lastReport();
 if (report != null) log('ffuzzy last crash:\n$report');
 
 // returns true if the native handler was installed
-FfzCrash.install(breadcrumbPath: '${dir.path}/ffuzzy_crash.log');
+FuzzyCrash.install(breadcrumbPath: '${dir.path}/ffuzzy_crash.log');
 ```
 
 | Member | Signature | Description |

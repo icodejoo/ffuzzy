@@ -9,7 +9,7 @@
 //     --target=integration_test/c_vs_rust_test.dart -d windows --profile
 import 'dart:io';
 
-import 'package:ffuzzy/ffuzzy.dart'; // C engine (FfzCorpus, FfzMode) — now the published package
+import 'package:ffuzzy/ffuzzy.dart'; // C engine (FuzzyCorpus, FuzzyMode) — now the published package
 import 'package:ffuzzy_rust_bench/ffuzzy.dart' as rust; // deprecated Rust/nucleo engine, kept for comparison
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -56,7 +56,7 @@ void main() {
     final base = ProcessInfo.currentRss;
 
     // C resident corpus via the bundled plugin native library (no path).
-    final c = FfzCorpus();
+    final c = FuzzyCorpus();
     c.addAll(items);
     final afterC = ProcessInfo.currentRss;
     final memC = afterC - base;
@@ -69,7 +69,7 @@ void main() {
 
     // correctness: identical match SETS (rank/order ignored) for each query.
     for (final q in queries) {
-      final cSet = c.filter(q, mode: FfzMode.fuzzy, highlight: false)
+      final cSet = c.filter(q, mode: FuzzyMode.fuzzy, highlight: false)
           .map((h) => h.index).toSet();
       final rSet = r.match(q).map((h) => h.index).toSet();
       expect(cSet, rSet, reason: 'identical matched items for "$q"');
@@ -81,7 +81,7 @@ void main() {
     final swC = Stopwatch()..start();
     for (var i = 0; i < reps; i++) {
       for (final q in queries) {
-        sink += c.filter(q, mode: FfzMode.fuzzy, parallel: true, limit: 50).length;
+        sink += c.filter(q, mode: FuzzyMode.fuzzy, parallel: true, limit: 50).length;
       }
     }
     swC.stop();

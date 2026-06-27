@@ -6,7 +6,7 @@ import 'package:ffuzzy/ffuzzy.dart';
 
 Future<void> main(List<String> args) async {
   final libPath = args.isNotEmpty ? args[0] : null;
-  final c = FfzCorpus(libraryPath: libPath);
+  final c = FuzzyCorpus(libraryPath: libPath);
 
   c.addAll(['src/main.rs', 'lib/ffz.dart', '中文搜索引擎', 'README.md', 'café']);
   if (c.length != 5) throw 'length ${c.length} != 5';
@@ -21,12 +21,12 @@ Future<void> main(List<String> args) async {
   if (fold.isEmpty) throw 'expected diacritic-folded hit for "cafe"';
 
   final pref =
-      c.filter('READ', mode: FfzMode.prefix, caseMatching: FfzCase.ignore);
+      c.filter('READ', mode: FuzzyMode.prefix, caseMatching: FuzzyCase.ignore);
   if (pref.isEmpty) throw 'expected prefix hit for "READ"';
 
   // Highlight conversion must yield in-range UTF-16 offsets.
   final h = fuzzy.first;
-  ffzCodepointToUtf16('src/main.rs', h.indices);
+  fuzzyCodepointToUtf16('src/main.rs', h.indices);
 
   // filterAsync must agree with the synchronous filter, element-by-element.
   final async = await c.filterAsync('src', limit: 10);
@@ -41,17 +41,17 @@ Future<void> main(List<String> args) async {
 
   // addKeyed: a CJK item findable by host-computed pinyin/initials.
   c.addKeyed('张三', [
-    FfzKey.kind('zhangsan', FfzKeyKind.pinyin),
-    FfzKey.kind('zs', FfzKeyKind.initials),
+    FuzzyKey.kind('zhangsan', FuzzyKeyKind.pinyin),
+    FuzzyKey.kind('zs', FuzzyKeyKind.initials),
   ]);
   final py = c.filter('zhangsan');
-  if (py.isEmpty || py.first.matchedKind != FfzKeyKind.pinyin) {
+  if (py.isEmpty || py.first.matchedKind != FuzzyKeyKind.pinyin) {
     throw 'addKeyed pinyin key did not match';
   }
 
-  // FfzCrash API: install never throws; lastReport on a fresh path is null.
-  FfzCrash.install();
-  if (FfzCrash.lastReport(breadcrumbPath: 'no_such_crash.log') != null) {
+  // FuzzyCrash API: install never throws; lastReport on a fresh path is null.
+  FuzzyCrash.install();
+  if (FuzzyCrash.lastReport(breadcrumbPath: 'no_such_crash.log') != null) {
     throw 'lastReport should be null when no breadcrumb exists';
   }
 

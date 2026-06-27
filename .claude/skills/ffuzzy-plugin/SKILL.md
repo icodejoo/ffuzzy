@@ -1,24 +1,29 @@
 ---
 name: ffuzzy-plugin
-description: Use when developing, building, regenerating bindings, testing, or publishing the ffuzzy Flutter fuzzy-search plugin. NOTE the active deliverable is now the pure-C port in clang/ (package `ffz`); the Rust + flutter_rust_bridge engine at the repo root is DEPRECATED and kept only for performance-comparison benchmarks. Covers both, project layout, public API, the codegen+cargo build workflow, environment gotchas on this machine, and pub.dev publishing blockers.
+description: Use when developing, building, testing, or publishing the ffuzzy Flutter fuzzy-search plugin. The published `ffuzzy` package is now the pure-C engine AT THE REPO ROOT (lib/ffuzzy.dart + src/ ffi/ include/ + platform dirs). The old Rust + flutter_rust_bridge engine is DEPRECATED, lives under benchmark/, and is kept only for performance comparison. Covers project layout, the public Dart API, the C build/test workflow, environment gotchas on this machine, and pub.dev publishing.
 ---
 
 # ffuzzy 插件开发指南
 
-> ⚠️ **方向变更(2026-06-27 起):Rust 引擎已废弃。**
-> 根目录的 Rust [`nucleo-matcher`](https://crates.io/crates/nucleo) + `flutter_rust_bridge` 实现
-> **不再开发、不再发布**,仅保留用作**性能对比基准**(benchmark)。
-> **当前要发布/开发/维护的是 `clang/` 下的纯 C 移植版(包名 `ffz`)** —— 见 memory 的
-> `ffuzzy-c-port-clang` 及 `clang/` 目录。
-> 下面关于 Rust/frb/cargokit/预编译/发布的内容,**只在做性能对比、或维护遗留 Rust 包时**才适用;
-> 日常任务请优先以 `clang/` 为准。
->
-> 注:C 移植(FFI)在 **web 上不可用**(web 无 dart:ffi);web 曾是 Rust+wasm 的唯一卖点,
-> 现也随 Rust 一并搁置。
+> ⚠️ **大重构(2026-06-27):C 引擎已提到仓库根并改名为 `ffuzzy`。**
+> - **当前发布/开发对象 = 仓库根的纯 C FFI 插件**,pub 包名 **`ffuzzy`**(已发版 0.3.0,
+>   顶替 pub.dev 上原 Rust 版 `ffuzzy` 0.1.2)。入口 `lib/ffuzzy.dart`,C 源在
+>   `src/ ffi/ include/`,平台目录 `android/ios/macos/linux/windows/`,示例 `example/`,
+>   对比/差分工具 `difftest/ perf/`,引擎内幕文档 `doc/INTERNALS.md`。
+> - **原生库名 `libffz`/`ffz.dll`、C 符号 `ffz_*`、FFI 查找名 `ffz_ffi_*`、C 编译宏 `FFZ_*` 保持不变**。
+>   **Dart 公开 API 用 `Fuzzy*` 前缀**(2026-06-27 从 `Ffz*` 改名):`FuzzyCorpus`、`FuzzyHit`、
+>   `FuzzyMode`/`FuzzyCase`/`FuzzyNorm`、`FuzzyKeyKind`、`FuzzyKey`、`FuzzyException`、`FuzzyCrash`、
+>   顶层函数 `fuzzyCodepointToUtf16`。
+> - **Rust + frb 引擎已废弃**,移到 `benchmark/`(包名 `ffuzzy_rust_bench`,`publish_to: none`),
+>   **仅用于 C-vs-Rust 性能对比**;`.pubignore` 已把 `benchmark/` 排除出发布包。
+> - 下面**关于 Rust/frb/cargokit/预编译/wasm 的所有章节都只适用于 `benchmark/` 里的遗留 Rust 包**;
+>   日常 ffuzzy 任务以仓库根的 C 代码为准。CI 是根的 `.github/workflows/ci.yml`(C 测试全套)。
+> - C(FFI)在 **web 上不可用**;web 曾是 Rust+wasm 的卖点,已随 Rust 一并搁置。
+> - 详见 memory `ffuzzy-c-port-clang`(注:其中 `clang/` 路径前缀现已等于仓库根)。
 
-ffuzzy(遗留 Rust 包)是一个 Flutter 插件:Rust [`nucleo-matcher`](https://crates.io/crates/nucleo) 引擎
-通过 [`flutter_rust_bridge`](https://pub.dev/packages/flutter_rust_bridge)(frb 2.12.0)+ cargokit
-暴露给 Dart,做 fzf 式子序列模糊搜索。
+以下 `ffuzzy`(遗留 Rust 包)章节描述的是 **`benchmark/` 里的对比基准**:Rust [`nucleo-matcher`](https://crates.io/crates/nucleo)
+经 [`flutter_rust_bridge`](https://pub.dev/packages/flutter_rust_bridge)(frb 2.12.0)+ cargokit
+暴露给 Dart。**不再用于发布**。
 
 ## 工程结构(自包含单包,可直接发布)
 
