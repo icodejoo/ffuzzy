@@ -37,6 +37,24 @@ enum FuzzyCase { respect, ignore, smart }
 /// Unicode normalization (mirrors `ffz_normalization`).
 enum FuzzyNorm { never, smart }
 
+/// Scoring model for corpus queries (mirrors `ffz_scoring_mode`).
+///
+/// Set the corpus-wide default in [FuzzyOptions]; override per call via the
+/// `scoring` named parameter on [FuzzyCorpus.fuzzy], [FuzzyCorpus.exact], etc.
+enum FuzzyScoring {
+  /// 2-row rolling DP with simplified bonuses (default). Faster than [nucleo]
+  /// in single-threaded scenarios; good ranking quality for typical use.
+  fast,
+
+  /// No DP. Prefilter only; all matching items get [FuzzyHit.score] == 0 and
+  /// are returned in corpus insertion order. Use for programmatic
+  /// exact/ID matching where ranking is irrelevant.
+  off,
+
+  /// Full-matrix DP, nucleo 0.3.1 compatible. Highest ranking accuracy.
+  nucleo,
+}
+
 /// Which key produced a hit. Custom host kinds use values >= 100.
 enum FuzzyKeyKind { original, pinyin, initials, romaji, custom }
 
@@ -71,6 +89,7 @@ FuzzyKeyKind _kindOf(int v) => switch (v) {
 /// - [limit]: max hits to return (`0` = all).
 /// - [highlight]: when false, match indices are skipped (faster, no [FuzzyHit.indices]).
 class FuzzyOptions {
+  final FuzzyScoring scoring;
   final FuzzyCase caseMatching;
   final FuzzyNorm normalization;
   final bool parallel;
@@ -79,6 +98,7 @@ class FuzzyOptions {
   final bool highlight;
 
   const FuzzyOptions({
+    this.scoring = FuzzyScoring.fast,
     this.caseMatching = FuzzyCase.smart,
     this.normalization = FuzzyNorm.smart,
     this.parallel = false,
@@ -89,6 +109,7 @@ class FuzzyOptions {
 
   /// A copy with the given fields replaced (null keeps the current value).
   FuzzyOptions copyWith({
+    FuzzyScoring? scoring,
     FuzzyCase? caseMatching,
     FuzzyNorm? normalization,
     bool? parallel,
@@ -97,6 +118,7 @@ class FuzzyOptions {
     bool? highlight,
   }) =>
       FuzzyOptions(
+        scoring: scoring ?? this.scoring,
         caseMatching: caseMatching ?? this.caseMatching,
         normalization: normalization ?? this.normalization,
         parallel: parallel ?? this.parallel,
@@ -164,6 +186,7 @@ List<int> fuzzyCodepointToUtf16(String text, List<int> codepointIndices) {
 
 // ── native signatures ───────────────────────────────────────────────────────
 typedef _NewCfgN = Pointer<Void> Function(Int32, Int32);
+typedef _NewCfg2N = Pointer<Void> Function(Int32, Int32, Int32);
 typedef _AddN = Void Function(Pointer<Void>, Pointer<Utf8>, Size);
 typedef _AddKeyedN = Void Function(Pointer<Void>, Pointer<Utf8>, Size,
     Pointer<Pointer<Utf8>>, Pointer<Size>, Pointer<Int32>, Size);
@@ -172,6 +195,8 @@ typedef _FreeN = Void Function(Pointer<Void>);
 typedef _VoidPtrN = Void Function(Pointer<Void>);
 typedef _FilterExN = Pointer<Void> Function(Pointer<Void>, Pointer<Utf8>, Size,
     Int32, Int32, Int32, Int32, Int32, Size);
+typedef _FilterEx2N = Pointer<Void> Function(Pointer<Void>, Pointer<Utf8>,
+    Size, Int32, Int32, Int32, Int32, Int32, Size, Int32);
 typedef _RLenN = Size Function(Pointer<Void>);
 typedef _RU32N = Uint32 Function(Pointer<Void>, Size);
 typedef _RI32N = Int32 Function(Pointer<Void>, Size);
@@ -213,6 +238,8 @@ class _Lib {
             'ffz_ffi_free'),
         installCrash = _lookupCrash(lib),
         addKeyed = _lookupAddKeyed(lib),
+        newCfg2 = _lookupNewCfg2(lib),
+        filterEx2 = _lookupFilterEx2(lib),
         finalizer = NativeFinalizer(
             lib.lookup<NativeFunction<_FreeN>>('ffz_ffi_free').cast());
 
@@ -251,6 +278,29 @@ class _Lib {
     }
   }
 
+  // Tolerant: a custom libraryPath might predate the scoring-mode exports.
+  static Pointer<Void> Function(int, int, int)? _lookupNewCfg2(
+      DynamicLibrary lib) {
+    try {
+      return lib.lookupFunction<_NewCfg2N,
+          Pointer<Void> Function(int, int, int)>('ffz_ffi_new_cfg2');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Pointer<Void> Function(Pointer<Void>, Pointer<Utf8>, int, int, int,
+      int, int, int, int, int)? _lookupFilterEx2(DynamicLibrary lib) {
+    try {
+      return lib.lookupFunction<
+          _FilterEx2N,
+          Pointer<Void> Function(Pointer<Void>, Pointer<Utf8>, int, int, int,
+              int, int, int, int, int)>('ffz_ffi_filter_ex2');
+    } catch (_) {
+      return null;
+    }
+  }
+
   final DynamicLibrary lib;
   final Pointer<Void> Function(int, int) newCfg;
   final void Function(Pointer<Void>, Pointer<Utf8>, int) add;
@@ -270,6 +320,9 @@ class _Lib {
   final int Function(Pointer<Utf8>)? installCrash;
   final void Function(Pointer<Void>, Pointer<Utf8>, int, Pointer<Pointer<Utf8>>,
       Pointer<Size>, Pointer<Int32>, int)? addKeyed;
+  final Pointer<Void> Function(int, int, int)? newCfg2;
+  final Pointer<Void> Function(Pointer<Void>, Pointer<Utf8>, int, int, int,
+      int, int, int, int, int)? filterEx2;
   final NativeFinalizer finalizer;
 
   static final Map<String, _Lib> _cache = {};
@@ -343,7 +396,10 @@ class FuzzyCorpus<T> implements Finalizable {
   })  : _stringOf = stringOf,
         _l = _Lib.resolve(libraryPath),
         _libPath = libraryPath {
-    _ptr = _l.newCfg(matchPaths ? 1 : 0, preferPrefix ? 1 : 0);
+    final sc = options.scoring.index;
+    _ptr = (_l.newCfg2 != null)
+        ? _l.newCfg2!(matchPaths ? 1 : 0, preferPrefix ? 1 : 0, sc)
+        : _l.newCfg(matchPaths ? 1 : 0, preferPrefix ? 1 : 0);
     if (_ptr == nullptr) {
       throw const FuzzyException('ffz_ffi_new_cfg returned null');
     }
@@ -660,12 +716,13 @@ class FuzzyCorpus<T> implements Finalizable {
           bool? parallel,
           int? threads,
           int? limit,
-          bool? highlight}) =>
+          bool? highlight,
+          FuzzyScoring? scoring}) =>
       _search(
           _mFuzzy,
           query,
-          _eff(caseMatching, normalization, parallel, threads, limit,
-              highlight));
+          _eff(caseMatching, normalization, parallel, threads, limit, highlight,
+              scoring));
 
   /// Contiguous-substring match (the whole query as one literal atom).
   List<FuzzyHit<T>> substring(String query,
@@ -674,12 +731,13 @@ class FuzzyCorpus<T> implements Finalizable {
           bool? parallel,
           int? threads,
           int? limit,
-          bool? highlight}) =>
+          bool? highlight,
+          FuzzyScoring? scoring}) =>
       _search(
           _mSubstring,
           query,
-          _eff(caseMatching, normalization, parallel, threads, limit,
-              highlight));
+          _eff(caseMatching, normalization, parallel, threads, limit, highlight,
+              scoring));
 
   /// Prefix match (the item starts with the query).
   List<FuzzyHit<T>> prefix(String query,
@@ -688,12 +746,13 @@ class FuzzyCorpus<T> implements Finalizable {
           bool? parallel,
           int? threads,
           int? limit,
-          bool? highlight}) =>
+          bool? highlight,
+          FuzzyScoring? scoring}) =>
       _search(
           _mPrefix,
           query,
-          _eff(caseMatching, normalization, parallel, threads, limit,
-              highlight));
+          _eff(caseMatching, normalization, parallel, threads, limit, highlight,
+              scoring));
 
   /// Suffix match (the item ends with the query).
   List<FuzzyHit<T>> postfix(String query,
@@ -702,12 +761,13 @@ class FuzzyCorpus<T> implements Finalizable {
           bool? parallel,
           int? threads,
           int? limit,
-          bool? highlight}) =>
+          bool? highlight,
+          FuzzyScoring? scoring}) =>
       _search(
           _mPostfix,
           query,
-          _eff(caseMatching, normalization, parallel, threads, limit,
-              highlight));
+          _eff(caseMatching, normalization, parallel, threads, limit, highlight,
+              scoring));
 
   /// Exact, whole-string match.
   List<FuzzyHit<T>> exact(String query,
@@ -716,12 +776,13 @@ class FuzzyCorpus<T> implements Finalizable {
           bool? parallel,
           int? threads,
           int? limit,
-          bool? highlight}) =>
+          bool? highlight,
+          FuzzyScoring? scoring}) =>
       _search(
           _mExact,
           query,
-          _eff(caseMatching, normalization, parallel, threads, limit,
-              highlight));
+          _eff(caseMatching, normalization, parallel, threads, limit, highlight,
+              scoring));
 
   /// Async [fuzzy] — runs the native scan + marshaling on a background isolate.
   Future<List<FuzzyHit<T>>> fuzzyAsync(String query,
@@ -730,12 +791,13 @@ class FuzzyCorpus<T> implements Finalizable {
           bool? parallel,
           int? threads,
           int? limit,
-          bool? highlight}) =>
+          bool? highlight,
+          FuzzyScoring? scoring}) =>
       _searchAsync(
           _mFuzzy,
           query,
-          _eff(caseMatching, normalization, parallel, threads, limit,
-              highlight));
+          _eff(caseMatching, normalization, parallel, threads, limit, highlight,
+              scoring));
 
   /// Async [substring].
   Future<List<FuzzyHit<T>>> substringAsync(String query,
@@ -744,12 +806,13 @@ class FuzzyCorpus<T> implements Finalizable {
           bool? parallel,
           int? threads,
           int? limit,
-          bool? highlight}) =>
+          bool? highlight,
+          FuzzyScoring? scoring}) =>
       _searchAsync(
           _mSubstring,
           query,
-          _eff(caseMatching, normalization, parallel, threads, limit,
-              highlight));
+          _eff(caseMatching, normalization, parallel, threads, limit, highlight,
+              scoring));
 
   /// Async [prefix].
   Future<List<FuzzyHit<T>>> prefixAsync(String query,
@@ -758,12 +821,13 @@ class FuzzyCorpus<T> implements Finalizable {
           bool? parallel,
           int? threads,
           int? limit,
-          bool? highlight}) =>
+          bool? highlight,
+          FuzzyScoring? scoring}) =>
       _searchAsync(
           _mPrefix,
           query,
-          _eff(caseMatching, normalization, parallel, threads, limit,
-              highlight));
+          _eff(caseMatching, normalization, parallel, threads, limit, highlight,
+              scoring));
 
   /// Async [postfix].
   Future<List<FuzzyHit<T>>> postfixAsync(String query,
@@ -772,12 +836,13 @@ class FuzzyCorpus<T> implements Finalizable {
           bool? parallel,
           int? threads,
           int? limit,
-          bool? highlight}) =>
+          bool? highlight,
+          FuzzyScoring? scoring}) =>
       _searchAsync(
           _mPostfix,
           query,
-          _eff(caseMatching, normalization, parallel, threads, limit,
-              highlight));
+          _eff(caseMatching, normalization, parallel, threads, limit, highlight,
+              scoring));
 
   /// Async [exact].
   Future<List<FuzzyHit<T>>> exactAsync(String query,
@@ -786,16 +851,18 @@ class FuzzyCorpus<T> implements Finalizable {
           bool? parallel,
           int? threads,
           int? limit,
-          bool? highlight}) =>
+          bool? highlight,
+          FuzzyScoring? scoring}) =>
       _searchAsync(
           _mExact,
           query,
-          _eff(caseMatching, normalization, parallel, threads, limit,
-              highlight));
+          _eff(caseMatching, normalization, parallel, threads, limit, highlight,
+              scoring));
 
   FuzzyOptions _eff(FuzzyCase? cm, FuzzyNorm? nm, bool? par, int? th, int? lim,
-          bool? hl) =>
+          bool? hl, FuzzyScoring? sc) =>
       options.copyWith(
+          scoring: sc,
           caseMatching: cm,
           normalization: nm,
           parallel: par,
@@ -847,8 +914,12 @@ class FuzzyCorpus<T> implements Finalizable {
   static List<_RawHit> _rawFilter(
       _Lib lib, Pointer<Void> ptr, String query, int mode, FuzzyOptions o) {
     final u = query._toUtf8();
-    final r = lib.filterEx(ptr, u.ptr, u.len, mode, o.caseMatching.index,
-        o.normalization.index, o.parallel ? 1 : 0, o.threads, o.limit);
+    final r = (lib.filterEx2 != null)
+        ? lib.filterEx2!(ptr, u.ptr, u.len, mode, o.caseMatching.index,
+            o.normalization.index, o.parallel ? 1 : 0, o.threads, o.limit,
+            o.scoring.index)
+        : lib.filterEx(ptr, u.ptr, u.len, mode, o.caseMatching.index,
+            o.normalization.index, o.parallel ? 1 : 0, o.threads, o.limit);
     malloc.free(u.ptr);
     if (r == nullptr) {
       throw const FuzzyException('filter failed (out of memory)');
@@ -1005,13 +1076,13 @@ class FuzzyOne<T> {
 
   FuzzyHit<T>? _one(int mode, String q, FuzzyCase? cm, FuzzyNorm? nm, bool? par,
       int? th, bool? hl) {
-    final r = _c._search(mode, q, _c._eff(cm, nm, par, th, 1, hl));
+    final r = _c._search(mode, q, _c._eff(cm, nm, par, th, 1, hl, null));
     return r.isEmpty ? null : r.first;
   }
 
   Future<FuzzyHit<T>?> _oneAsync(int mode, String q, FuzzyCase? cm,
       FuzzyNorm? nm, bool? par, int? th, bool? hl) async {
-    final r = await _c._searchAsync(mode, q, _c._eff(cm, nm, par, th, 1, hl));
+    final r = await _c._searchAsync(mode, q, _c._eff(cm, nm, par, th, 1, hl, null));
     return r.isEmpty ? null : r.first;
   }
 }
