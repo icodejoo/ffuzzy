@@ -107,10 +107,15 @@ ffz_parallel ffz_parallel_with(int threads);     // {true, threads}
 // Filter the corpus with `query` (parsed with `cm`/`nm`). Results are sorted by
 // score descending (ties broken by item index). If `limit > 0`, at most
 // `limit` hits are returned. `mode` selects the match algorithm for the query.
+// `scoring` overrides the corpus-wide default for this call.
 void ffz_corpus_filter(ffz_corpus *c, const char *query, size_t query_len,
                        ffz_case_matching cm, ffz_normalization nm,
                        ffz_mode mode, ffz_parallel par, size_t limit,
+                       ffz_scoring_mode scoring,
                        ffz_results *out);
+
+// Return the corpus-level scoring mode (stored in its ffz_config).
+ffz_scoring_mode ffz_corpus_scoring(const ffz_corpus *c);
 
 #ifdef __cplusplus
 }

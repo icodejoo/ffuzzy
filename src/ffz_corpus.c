@@ -373,12 +373,14 @@ typedef struct {
     scored *out;   // capacity `cap`
     size_t cap;    // = hi-lo (append-all) or `limit` (bounded top-K)
     bool bounded;
+    ffz_scoring_mode scoring;
     size_t n;      // filled by the worker
 } scan_job;
 
 static void scan_job_run(scan_job *j) {
     // Each thread owns its matcher (the matcher holds mutable scratch).
     ffz_matcher *m = ffz_matcher_new(j->c->cfg);
+    if (m) m->cfg.scoring_mode = j->scoring;
     if (m) {
         collector col = {j->out, 0, j->cap, j->bounded};
         scan_range(j->c, m, j->pat, j->lo, j->hi, &col);
@@ -423,9 +425,14 @@ static unsigned resolve_threads(ffz_parallel par, size_t nitems) {
     return t;
 }
 
+ffz_scoring_mode ffz_corpus_scoring(const ffz_corpus *c) {
+    return c->cfg.scoring_mode;
+}
+
 void ffz_corpus_filter(ffz_corpus *c, const char *query, size_t query_len,
                        ffz_case_matching cm, ffz_normalization nm,
                        ffz_mode mode, ffz_parallel par, size_t limit,
+                       ffz_scoring_mode scoring,
                        ffz_results *out) {
     out->hits = NULL;
     out->len = out->cap = 0;
@@ -442,6 +449,7 @@ void ffz_corpus_filter(ffz_corpus *c, const char *query, size_t query_len,
         ffz_matcher_free(fm);
         return;
     }
+    fm->cfg.scoring_mode = scoring;
 
     // Pass 1: best key per item (no indices). Optionally multi-threaded.
     // On any allocation/thread failure we degrade gracefully (serial / fewer
@@ -477,7 +485,7 @@ void ffz_corpus_filter(ffz_corpus *c, const char *query, size_t query_len,
                 bool bounded = (limit > 0 && limit < (hi - lo));
                 size_t cap = bounded ? limit : (hi - lo);
                 scored *obuf = (scored *)malloc(cap * sizeof(scored));
-                jobs[t] = (scan_job){c, pat, lo, hi, obuf, cap, bounded, 0};
+                jobs[t] = (scan_job){c, pat, lo, hi, obuf, cap, bounded, scoring, 0};
                 spawned = t + 1;
                 if (!obuf) continue;  // OOM: this chunk yields 0 results
                 if (thr_start(&jobs[t], &ths[t])) started[t] = 1;
@@ -497,19 +505,26 @@ void ffz_corpus_filter(ffz_corpus *c, const char *query, size_t query_len,
         free(started);
     }
 
-    // When a limit caps the output well below the match count, select the
-    // top-`limit` with a bounded heap instead of sorting everything.
+    // OFF mode: results arrived in corpus insertion order (serial) or chunk
+    // order (parallel, which also preserves insertion order since chunks are
+    // contiguous). Skip sort; just truncate to limit.
     size_t keep;
-    scored *top = (limit && limit < ns) ? (scored *)malloc(limit * sizeof(scored))
-                                        : NULL;
-    if (top) {
-        scored_topk(sc, ns, limit, top);
-        free(sc);
-        sc = top;
-        keep = limit;
+    if (scoring == FFZ_SCORE_OFF) {
+        keep = (limit && limit < ns) ? limit : ns;
     } else {
-        if (ns) qsort(sc, ns, sizeof(scored), cmp_scored);  // NULL/0-safe
-        keep = ns;
+        // When a limit caps the output well below the match count, select the
+        // top-`limit` with a bounded heap instead of sorting everything.
+        scored *top = (limit && limit < ns) ? (scored *)malloc(limit * sizeof(scored))
+                                            : NULL;
+        if (top) {
+            scored_topk(sc, ns, limit, top);
+            free(sc);
+            sc = top;
+            keep = limit;
+        } else {
+            if (ns) qsort(sc, ns, sizeof(scored), cmp_scored);  // NULL/0-safe
+            keep = ns;
+        }
     }
 
     // Pass 2: recompute indices only for the survivors, on their winning key.

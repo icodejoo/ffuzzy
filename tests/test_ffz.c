@@ -93,18 +93,18 @@ static void test_corpus_clear_limit(void) {
     ffz_corpus_add(c, "beta", 4);
     ffz_results r = {0};
     ffz_corpus_filter(c, "al", 2, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                      ffz_parallel_off(), 0, &r);  // limit 0 == all matches
+                      ffz_parallel_off(), 0, FFZ_SCORE_FAST, &r);  // limit 0 == all matches
     CHECK(r.len == 2, "limit=0 returns all matches");
     ffz_results_free(&r);
     ffz_corpus_clear(c);
     CHECK(ffz_corpus_len(c) == 0, "clear empties the corpus");
     ffz_corpus_filter(c, "al", 2, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                      ffz_parallel_off(), 0, &r);
+                      ffz_parallel_off(), 0, FFZ_SCORE_FAST, &r);
     CHECK(r.len == 0, "filter on empty corpus -> 0");
     ffz_results_free(&r);
     ffz_corpus_add(c, "alien", 5);  // reuse after clear
     ffz_corpus_filter(c, "al", 2, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                      ffz_parallel_off(), 0, &r);
+                      ffz_parallel_off(), 0, FFZ_SCORE_FAST, &r);
     CHECK(r.len == 1 && r.hits[0].item_index == 0, "reuse after clear works");
     ffz_results_free(&r);
     ffz_corpus_free(c);
@@ -261,14 +261,14 @@ static void test_add_keyed(void) {
 
     ffz_results r = {0};
     ffz_corpus_filter(c, "zhangsan", 8, FFZ_CASE_SMART, FFZ_NORM_SMART,
-                      FFZ_FUZZY, ffz_parallel_off(), 0, &r);
+                      FFZ_FUZZY, ffz_parallel_off(), 0, FFZ_SCORE_FAST, &r);
     CHECK(r.len == 1 && r.hits[0].item_index == 0 &&
               r.hits[0].matched_kind == FFZ_KEY_PINYIN,
           "add_keyed: pinyin key matches 张三");
     ffz_results_free(&r);
 
     ffz_corpus_filter(c, "zs", 2, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                      ffz_parallel_off(), 0, &r);
+                      ffz_parallel_off(), 0, FFZ_SCORE_FAST, &r);
     CHECK(r.len >= 1 && r.hits[0].matched_kind == FFZ_KEY_INITIALS,
           "add_keyed: initials key matches");
     ffz_results_free(&r);
@@ -287,7 +287,7 @@ static void test_corpus(void) {
 
     // pinyin match -> finds 张三 via the PINYIN key.
     ffz_corpus_filter(c, "zhangsan", 8, FFZ_CASE_SMART, FFZ_NORM_SMART,
-                      FFZ_FUZZY, ffz_parallel_off(), 0, &r);
+                      FFZ_FUZZY, ffz_parallel_off(), 0, FFZ_SCORE_FAST, &r);
     CHECK(r.len >= 1, "zhangsan finds something");
     int found_zh = 0;
     for (size_t i = 0; i < r.len; i++)
@@ -298,7 +298,7 @@ static void test_corpus(void) {
 
     // initials "zs" -> 张三 via INITIALS key.
     ffz_corpus_filter(c, "zs", 2, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                      ffz_parallel_off(), 0, &r);
+                      ffz_parallel_off(), 0, FFZ_SCORE_FAST, &r);
     int found_ini = 0;
     for (size_t i = 0; i < r.len; i++)
         if (r.hits[i].item_index == 0 &&
@@ -309,7 +309,7 @@ static void test_corpus(void) {
 
     // original CJK query -> matches ORIGINAL key, indices into the display text.
     ffz_corpus_filter(c, "\xE5\xBC\xA0", 3, FFZ_CASE_SMART, FFZ_NORM_SMART,
-                      FFZ_FUZZY, ffz_parallel_off(), 0, &r);
+                      FFZ_FUZZY, ffz_parallel_off(), 0, FFZ_SCORE_FAST, &r);
     CHECK(r.len == 1 && r.hits[0].item_index == 0 &&
               r.hits[0].matched_kind == FFZ_KEY_ORIGINAL,
           "张 -> item 0 via ORIGINAL key");
@@ -320,7 +320,7 @@ static void test_corpus(void) {
 
     // limit truncates.
     ffz_corpus_filter(c, "z", 1, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                      ffz_parallel_off(), 1, &r);
+                      ffz_parallel_off(), 1, FFZ_SCORE_FAST, &r);
     CHECK(r.len == 1, "limit=1 truncates");
     ffz_results_free(&r);
 
@@ -337,9 +337,9 @@ static void test_parallel(void) {
     }
     ffz_results a = {0}, b = {0};
     ffz_corpus_filter(c, "gem", 3, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                      ffz_parallel_off(), 100, &a);
+                      ffz_parallel_off(), 100, FFZ_SCORE_FAST, &a);
     ffz_corpus_filter(c, "gem", 3, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                      ffz_parallel_auto(), 100, &b);
+                      ffz_parallel_auto(), 100, FFZ_SCORE_FAST, &b);
     CHECK(a.len == 100 && b.len == 100, "parallel + serial both return 100");
     int same = a.len == b.len;
     for (size_t i = 0; i < a.len && i < b.len; i++)
@@ -350,7 +350,7 @@ static void test_parallel(void) {
     // explicit thread count works too
     ffz_results d = {0};
     ffz_corpus_filter(c, "gem", 3, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                      ffz_parallel_with(4), 100, &d);
+                      ffz_parallel_with(4), 100, FFZ_SCORE_FAST, &d);
     CHECK(d.len == 100, "explicit 4 threads returns 100");
     ffz_results_free(&a);
     ffz_results_free(&b);
@@ -377,9 +377,9 @@ static void test_property(void) {
         for (size_t li = 0; li < sizeof(limits) / sizeof(limits[0]); li++) {
             ffz_results s = {0}, p = {0};
             ffz_corpus_filter(c, queries[qi], ql, FFZ_CASE_SMART, FFZ_NORM_SMART,
-                              FFZ_FUZZY, ffz_parallel_off(), limits[li], &s);
+                              FFZ_FUZZY, ffz_parallel_off(), limits[li], FFZ_SCORE_FAST, &s);
             ffz_corpus_filter(c, queries[qi], ql, FFZ_CASE_SMART, FFZ_NORM_SMART,
-                              FFZ_FUZZY, ffz_parallel_with(4), limits[li], &p);
+                              FFZ_FUZZY, ffz_parallel_with(4), limits[li], FFZ_SCORE_FAST, &p);
             if (s.len != p.len) ok_det = 0;
             for (size_t i = 0; i < s.len && i < p.len; i++) {
                 if (s.hits[i].item_index != p.hits[i].item_index ||
@@ -425,9 +425,9 @@ static void test_determinism_corners(void) {
         }
         ffz_results s = {0}, p = {0};
         ffz_corpus_filter(c, "db", 2, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                          ffz_parallel_off(), 0, &s);
+                          ffz_parallel_off(), 0, FFZ_SCORE_FAST, &s);
         ffz_corpus_filter(c, "db", 2, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                          ffz_parallel_auto(), 0, &p);
+                          ffz_parallel_auto(), 0, FFZ_SCORE_FAST, &p);
         if (!results_identical(&s, &p)) ok_bound = 0;
         ffz_results_free(&s);
         ffz_results_free(&p);
@@ -445,9 +445,9 @@ static void test_determinism_corners(void) {
     for (size_t li = 0; li < 4; li++) {
         ffz_results s = {0}, p = {0};
         ffz_corpus_filter(c, "widget", 6, FFZ_CASE_SMART, FFZ_NORM_SMART,
-                          FFZ_FUZZY, ffz_parallel_off(), limits[li], &s);
+                          FFZ_FUZZY, ffz_parallel_off(), limits[li], FFZ_SCORE_FAST, &s);
         ffz_corpus_filter(c, "widget", 6, FFZ_CASE_SMART, FFZ_NORM_SMART,
-                          FFZ_FUZZY, ffz_parallel_with(8), limits[li], &p);
+                          FFZ_FUZZY, ffz_parallel_with(8), limits[li], FFZ_SCORE_FAST, &p);
         if (!results_identical(&s, &p)) ok_ties = 0;
         ffz_results_free(&s);
         ffz_results_free(&p);
@@ -457,14 +457,54 @@ static void test_determinism_corners(void) {
     // 3) Limit corners on a parallel-eligible corpus.
     ffz_results r = {0};
     ffz_corpus_filter(c, "zzzz_nomatch", 12, FFZ_CASE_SMART, FFZ_NORM_SMART,
-                      FFZ_PREFIX, ffz_parallel_auto(), 0, &r);
+                      FFZ_PREFIX, ffz_parallel_auto(), 0, FFZ_SCORE_FAST, &r);
     if (r.len != 0) ok_corner = 0;  // no-match -> empty, no crash
     ffz_results_free(&r);
     ffz_corpus_filter(c, "widget", 6, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                      ffz_parallel_auto(), 999999, &r);  // limit >> matches
+                      ffz_parallel_auto(), 999999, FFZ_SCORE_FAST, &r);  // limit >> matches
     if (r.len != 2001) ok_corner = 0;  // all items match "widget"
     ffz_results_free(&r);
     CHECK(ok_corner, "limit corners: no-match empty, limit>>n returns all");
+    ffz_corpus_free(c);
+}
+
+static void test_corpus_scoring_modes(void) {
+    ffz_corpus *c = ffz_corpus_new(ffz_config_default());
+    ffz_corpus_add(c, "configure", 9);
+    ffz_corpus_add(c, "cfg_helper", 10);
+    ffz_corpus_add(c, "my_cfg", 6);
+    ffz_corpus_add(c, "ffz_config", 10);
+    ffz_corpus_add(c, "no_match_xyz", 12);
+
+    // --- OFF: original order, score=0, limit respected ---
+    ffz_results r = {0};
+    ffz_corpus_filter(c, "cfg", 3, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
+                      ffz_parallel_off(), 2, FFZ_SCORE_OFF, &r);
+    CHECK(r.len == 2, "OFF corpus: respects limit=2");
+    CHECK(r.hits[0].item_index == 0, "OFF corpus: first hit is insertion-order first");
+    CHECK(r.hits[1].item_index == 1, "OFF corpus: second hit is insertion-order second");
+    CHECK(r.hits[0].score == 0, "OFF corpus: score is 0");
+    CHECK(r.hits[1].score == 0, "OFF corpus: score is 0");
+    ffz_results_free(&r);
+
+    // --- FAST: ranked by rolling DP score ---
+    ffz_results r2 = {0};
+    ffz_corpus_filter(c, "cfg", 3, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
+                      ffz_parallel_off(), 3, FFZ_SCORE_FAST, &r2);
+    CHECK(r2.len == 3, "FAST corpus: returns 3 matches");
+    bool cfg_helper_first = r2.hits[0].item_index == 1;  // cfg_helper is item 1
+    CHECK(cfg_helper_first, "FAST corpus: boundary match ranked first");
+    CHECK(r2.hits[0].score > 0, "FAST corpus: score is positive");
+    ffz_results_free(&r2);
+
+    // --- NUCLEO: existing behaviour ---
+    ffz_results r3 = {0};
+    ffz_corpus_filter(c, "cfg", 3, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
+                      ffz_parallel_off(), 3, FFZ_SCORE_NUCLEO, &r3);
+    CHECK(r3.len == 3, "NUCLEO corpus: returns 3 matches");
+    CHECK(r3.hits[0].score > 0, "NUCLEO corpus: positive score");
+    ffz_results_free(&r3);
+
     ffz_corpus_free(c);
 }
 
@@ -559,6 +599,7 @@ int main(void) {
     test_property();
     test_determinism_corners();
     test_corpus_clear_limit();
+    test_corpus_scoring_modes();
     test_scoring_modes();
     test_rolling_dp();
 

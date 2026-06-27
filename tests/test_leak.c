@@ -63,10 +63,10 @@ static void corpus_cycle(ffz_parallel par) {
     ffz_corpus_add(c, "\xE5\xBC\xA0\xE4\xB8\x89", 6);  // 张三 (+hook keys)
     ffz_results r = {0};
     ffz_corpus_filter(c, "gem", 3, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                      par, 50, &r);
+                      par, 50, FFZ_SCORE_FAST, &r);
     ffz_results_free(&r);
     ffz_corpus_filter(c, "zs", 2, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                      par, 50, &r);
+                      par, 50, FFZ_SCORE_FAST, &r);
     ffz_results_free(&r);
     ffz_corpus_free(c);
 }
@@ -85,7 +85,7 @@ static void arena_cycle(void) {
     }
     ffz_results r = {0};
     ffz_corpus_filter(c, "small", 5, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                      ffz_parallel_off(), 10, &r);
+                      ffz_parallel_off(), 10, FFZ_SCORE_FAST, &r);
     ffz_results_free(&r);
     ffz_corpus_clear(c);          // arena_free all blocks
     ffz_corpus_add(c, "reuse", 5);  // reuse after clear
@@ -106,10 +106,10 @@ static void oom_cycle(int budget) {
         }
         ffz_results r = {0};
         ffz_corpus_filter(c, "widget", 6, FFZ_CASE_SMART, FFZ_NORM_SMART,
-                          FFZ_FUZZY, ffz_parallel_off(), 25, &r);
+                          FFZ_FUZZY, ffz_parallel_off(), 25, FFZ_SCORE_FAST, &r);
         ffz_results_free(&r);
         ffz_corpus_filter(c, "dart", 4, FFZ_CASE_SMART, FFZ_NORM_SMART,
-                          FFZ_FUZZY, ffz_parallel_auto(), 0, &r);
+                          FFZ_FUZZY, ffz_parallel_auto(), 0, FFZ_SCORE_FAST, &r);
         ffz_results_free(&r);
         ffz_corpus_free(c);  // frees succeed (no allocation) even under injection
     }
@@ -160,7 +160,7 @@ int main(void) {
     for (int q = 0; q < 200; q++) {
         ffz_results r = {0};
         ffz_corpus_filter(c, "svc", 3, FFZ_CASE_SMART, FFZ_NORM_SMART, FFZ_FUZZY,
-                          ffz_parallel_off(), 20, &r);
+                          ffz_parallel_off(), 20, FFZ_SCORE_FAST, &r);
         ffz_results_free(&r);
         CHECK(ffz_alloc_live_blocks() == held, "filter+results_free leaves no residue");
         if (g_fail) break;

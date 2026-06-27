@@ -79,7 +79,7 @@ FFZ_API ffz_results *ffz_ffi_filter_ex(ffz_corpus *c, const char *q, size_t qn,
     par.parallel = parallel != 0;
     par.threads = threads;
     ffz_corpus_filter(c, q, qn, (ffz_case_matching)cm, (ffz_normalization)nm,
-                      (ffz_mode)mode, par, limit, r);
+                      (ffz_mode)mode, par, limit, ffz_corpus_scoring(c), r);
     return r;
 }
 // Back-compat default (smart case + smart normalize).
