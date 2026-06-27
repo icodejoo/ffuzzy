@@ -524,6 +524,70 @@ class FuzzyCorpus<T> implements Finalizable {
     return c;
   }
 
+  // ── one-shot best match (no persistent corpus) ─────────────────────────────
+  // Build a throwaway corpus, fuzzy-search once, return the best hit, free it.
+  // Convenient for a single query; do NOT call in a hot loop (it rebuilds the
+  // corpus every time) — keep a [FuzzyCorpus] and use `fuzzy(q, limit: 1)` then.
+
+  /// Best fuzzy hit of [query] over [items], or null. One-shot: no corpus to
+  /// keep or dispose. [stringOf] projects each item to its searchable text.
+  static FuzzyHit<T>? one<T>(
+    Iterable<T> items,
+    String query, {
+    required String Function(T) stringOf,
+    FuzzyOptions options = const FuzzyOptions(),
+    bool matchPaths = false,
+    bool preferPrefix = false,
+    String? libraryPath,
+  }) {
+    final c = FuzzyCorpus<T>(items,
+        stringOf: stringOf,
+        options: options,
+        matchPaths: matchPaths,
+        preferPrefix: preferPrefix,
+        libraryPath: libraryPath);
+    try {
+      final r = c.fuzzy(query, limit: 1);
+      return r.isEmpty ? null : r.first;
+    } finally {
+      c.dispose();
+    }
+  }
+
+  /// One-shot [one] for a list of plain strings.
+  static FuzzyHit<String>? oneStrings(
+    Iterable<String> items,
+    String query, {
+    FuzzyOptions options = const FuzzyOptions(),
+    bool matchPaths = false,
+    bool preferPrefix = false,
+    String? libraryPath,
+  }) =>
+      one<String>(items, query,
+          stringOf: _identityString,
+          options: options,
+          matchPaths: matchPaths,
+          preferPrefix: preferPrefix,
+          libraryPath: libraryPath);
+
+  /// One-shot [one] for a `List<Map>` searched by one string [field]; the hit's
+  /// [FuzzyHit.obj] is the whole map.
+  static FuzzyHit<Map<String, dynamic>>? oneKeyed(
+    Iterable<Map<String, dynamic>> items,
+    String field,
+    String query, {
+    FuzzyOptions options = const FuzzyOptions(),
+    bool matchPaths = false,
+    bool preferPrefix = false,
+    String? libraryPath,
+  }) =>
+      one<Map<String, dynamic>>(items, query,
+          stringOf: (m) => (m[field] as String?) ?? '',
+          options: options,
+          matchPaths: matchPaths,
+          preferPrefix: preferPrefix,
+          libraryPath: libraryPath);
+
   /// Append [item] with explicit alternate search [keys] — e.g. host-computed
   /// pinyin/romaji/initials, so a CJK item is findable by typing latin. The
   /// ORIGINAL key ([stringOf] of the item) is added automatically. A hit reports
@@ -787,119 +851,6 @@ class FuzzyCorpus<T> implements Finalizable {
           query,
           _eff(caseMatching, normalization, parallel, threads, limit,
               highlight));
-
-  // ── single best hit (sugar for `mode(query, limit: 1).firstOrNull`) ────────
-
-  /// Best fuzzy hit, or null. (`limit` is forced to 1.)
-  FuzzyHit<T>? fuzzySingle(String query,
-          {FuzzyCase? caseMatching,
-          FuzzyNorm? normalization,
-          bool? parallel,
-          int? threads,
-          bool? highlight}) =>
-      _single(_mFuzzy, query,
-          _eff(caseMatching, normalization, parallel, threads, 1, highlight));
-
-  /// Best substring hit, or null.
-  FuzzyHit<T>? substringSingle(String query,
-          {FuzzyCase? caseMatching,
-          FuzzyNorm? normalization,
-          bool? parallel,
-          int? threads,
-          bool? highlight}) =>
-      _single(_mSubstring, query,
-          _eff(caseMatching, normalization, parallel, threads, 1, highlight));
-
-  /// Best prefix hit, or null.
-  FuzzyHit<T>? prefixSingle(String query,
-          {FuzzyCase? caseMatching,
-          FuzzyNorm? normalization,
-          bool? parallel,
-          int? threads,
-          bool? highlight}) =>
-      _single(_mPrefix, query,
-          _eff(caseMatching, normalization, parallel, threads, 1, highlight));
-
-  /// Best postfix hit, or null.
-  FuzzyHit<T>? postfixSingle(String query,
-          {FuzzyCase? caseMatching,
-          FuzzyNorm? normalization,
-          bool? parallel,
-          int? threads,
-          bool? highlight}) =>
-      _single(_mPostfix, query,
-          _eff(caseMatching, normalization, parallel, threads, 1, highlight));
-
-  /// Best exact hit, or null.
-  FuzzyHit<T>? exactSingle(String query,
-          {FuzzyCase? caseMatching,
-          FuzzyNorm? normalization,
-          bool? parallel,
-          int? threads,
-          bool? highlight}) =>
-      _single(_mExact, query,
-          _eff(caseMatching, normalization, parallel, threads, 1, highlight));
-
-  /// Async [fuzzySingle].
-  Future<FuzzyHit<T>?> fuzzySingleAsync(String query,
-          {FuzzyCase? caseMatching,
-          FuzzyNorm? normalization,
-          bool? parallel,
-          int? threads,
-          bool? highlight}) =>
-      _singleAsync(_mFuzzy, query,
-          _eff(caseMatching, normalization, parallel, threads, 1, highlight));
-
-  /// Async [substringSingle].
-  Future<FuzzyHit<T>?> substringSingleAsync(String query,
-          {FuzzyCase? caseMatching,
-          FuzzyNorm? normalization,
-          bool? parallel,
-          int? threads,
-          bool? highlight}) =>
-      _singleAsync(_mSubstring, query,
-          _eff(caseMatching, normalization, parallel, threads, 1, highlight));
-
-  /// Async [prefixSingle].
-  Future<FuzzyHit<T>?> prefixSingleAsync(String query,
-          {FuzzyCase? caseMatching,
-          FuzzyNorm? normalization,
-          bool? parallel,
-          int? threads,
-          bool? highlight}) =>
-      _singleAsync(_mPrefix, query,
-          _eff(caseMatching, normalization, parallel, threads, 1, highlight));
-
-  /// Async [postfixSingle].
-  Future<FuzzyHit<T>?> postfixSingleAsync(String query,
-          {FuzzyCase? caseMatching,
-          FuzzyNorm? normalization,
-          bool? parallel,
-          int? threads,
-          bool? highlight}) =>
-      _singleAsync(_mPostfix, query,
-          _eff(caseMatching, normalization, parallel, threads, 1, highlight));
-
-  /// Async [exactSingle].
-  Future<FuzzyHit<T>?> exactSingleAsync(String query,
-          {FuzzyCase? caseMatching,
-          FuzzyNorm? normalization,
-          bool? parallel,
-          int? threads,
-          bool? highlight}) =>
-      _singleAsync(_mExact, query,
-          _eff(caseMatching, normalization, parallel, threads, 1, highlight));
-
-  FuzzyHit<T>? _single(int mode, String query, FuzzyOptions o) {
-    final r = _search(mode, query, o);
-    return r.isEmpty ? null : r.first;
-  }
-
-  Future<FuzzyHit<T>?> _singleAsync(
-      int mode, String query, FuzzyOptions o) async {
-    final r = await _searchAsync(mode, query, o);
-    return r.isEmpty ? null : r.first;
-  }
 
   FuzzyOptions _eff(FuzzyCase? cm, FuzzyNorm? nm, bool? par, int? th, int? lim,
           bool? hl) =>

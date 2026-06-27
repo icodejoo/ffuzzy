@@ -57,11 +57,19 @@ Future<void> main(List<String> args) async {
   if (c.fuzzy('README').isNotEmpty) throw 'removed item should not match';
   if (c.fuzzy('src').isEmpty) throw 'survivor should still match after rebuild';
 
-  // single: best hit, or null when nothing matches.
-  if (c.fuzzySingle('src') == null) throw 'fuzzySingle should find a hit';
-  if (c.exactSingle('definitely-absent') != null) {
-    throw 'exactSingle should be null for no match';
+  // one-shot best match (static, no persistent corpus to keep/dispose).
+  if (FuzzyCorpus.oneStrings(['alpha', 'beta', 'gamma'], 'gam',
+          libraryPath: libPath) ==
+      null) {
+    throw 'oneStrings should find a hit';
   }
+  if (FuzzyCorpus.oneStrings(['alpha'], 'zzz', libraryPath: libPath) != null) {
+    throw 'oneStrings should be null for no match';
+  }
+  final om = FuzzyCorpus.oneKeyed([
+    {'name': 'Carol'}
+  ], 'name', 'car', libraryPath: libPath);
+  if (om == null || om.obj['name'] != 'Carol') throw 'oneKeyed failed';
 
   // keyed: a List<Map> searched by a field; hit.obj is the whole map.
   final maps = FuzzyCorpus.keyed([

@@ -13,7 +13,8 @@ description: Use when developing, building, testing, or publishing the ffuzzy Fl
 > - **原生库名 `libffz`/`ffz.dll`、C 符号 `ffz_*`、FFI 查找名 `ffz_ffi_*`、C 编译宏 `FFZ_*` 保持不变**。
 >   **Dart 公开 API 全部 `Fuzzy*` 前缀**(2026-06-27 从 `Ffz*` 改名 + 重设计,对齐 Rust 版能力):
 >   - `FuzzyCorpus<T>`(泛型对象搜索,构造传 `stringOf`);便捷构造 `FuzzyCorpus.strings(items)`、`FuzzyCorpus.keyed(maps, field)`(List<Map> 按字段)、`FuzzyCorpus.buildAsync(items, stringOf:)`(后台 isolate 建库)。
->   - **模式是方法不是 flag**:`fuzzy`/`substring`/`prefix`/`postfix`/`exact`,各带 `…Async` 孪生 + `…Single`/`…SingleAsync`(取最佳单条,返回 `FuzzyHit<T>?`)。`FuzzyMode` 枚举已删,改为内部 int 常量。
+>   - **取最佳单条**:**没有 per-mode 的 `…Single` 方法**(已删)。常驻 corpus 用 `fuzzy(q, limit:1).first`;一次性(不建常驻)用静态 `FuzzyCorpus.one(items, q, stringOf:)` / `oneStrings(items, q)` / `oneKeyed(maps, field, q)`→ `FuzzyHit<T>?`(内部建临时 corpus→搜→dispose,**别在热循环里用**;默认 fuzzy 模式)。
+>   - **模式是方法不是 flag**:`fuzzy`/`substring`/`prefix`/`postfix`/`exact`,各带 `…Async` 孪生。`FuzzyMode` 枚举已删,改为内部 int 常量。
 >   - `FuzzyOptions`(可选、含默认值,聚合 `caseMatching`/`normalization`/`parallel`/`threads`/`limit`/`highlight`):构造设 corpus 级默认,方法上可空命名参数逐字段覆盖(`copyWith` 合并)。
 >   - 增删改:`add`/`addAll`/`addAllAsync`(后台 isolate)/`addKeyed`/`update`/`removeAt`/`removeWhere`(返回删除数)/`refresh([source])`(无参重建 / 传 source 整体替换)/`clear`。**没有"单独索引"概念——原生 corpus 即索引,`add` 即建;`clear` 全清,重建=重新 add。原生 append-only,逐项删改在 Dart 侧 clear+重 add 重建(O(n));内部 `List<T> _items` + `List<List<FuzzyKey>?> _keys` 与原生下标 1:1**。
 >   - **并发模型**:原生支持并发读、写需独占。同步搜索在调用 isolate 无竞争;`…Async` 搜索是并发读(各自私有 matcher scratch,安全);`addAllAsync` 是独占写(期间任何搜索/改/dispose 抛 `StateError`);搜索在飞时 mutate/`addAllAsync`/dispose 抛 `StateError`。**高频键入要"最新优先":同步搜天然最新;异步需 generation 守卫丢弃过期结果(example 已示范)**。`fuzzyAsync` 每次 = `Isolate.run` 一次性 isolate,高频别每键一发。
