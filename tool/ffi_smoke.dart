@@ -49,12 +49,40 @@ Future<void> main(List<String> args) async {
     throw 'addKeyed pinyin key did not match';
   }
 
-  // Mutation (rebuild path): removeWhere drops items; survivors still match.
+  // Mutation (rebuild path): removeWhere drops items + returns the count.
   final before = c.length;
-  c.removeWhere((s) => s == 'README.md');
+  final removed = c.removeWhere((s) => s == 'README.md');
+  if (removed != 1) throw 'removeWhere should return 1, got $removed';
   if (c.length != before - 1) throw 'removeWhere did not drop one item';
   if (c.fuzzy('README').isNotEmpty) throw 'removed item should not match';
   if (c.fuzzy('src').isEmpty) throw 'survivor should still match after rebuild';
+
+  // single: best hit, or null when nothing matches.
+  if (c.fuzzySingle('src') == null) throw 'fuzzySingle should find a hit';
+  if (c.exactSingle('definitely-absent') != null) {
+    throw 'exactSingle should be null for no match';
+  }
+
+  // keyed: a List<Map> searched by a field; hit.obj is the whole map.
+  final maps = FuzzyCorpus.keyed([
+    {'name': 'Alice', 'id': 1},
+    {'name': 'Bob', 'id': 2},
+  ], 'name', libraryPath: libPath);
+  final ml = maps.prefix('Al');
+  if (ml.isEmpty || ml.first.obj['id'] != 1) throw 'keyed map search failed';
+  maps.dispose();
+
+  // buildAsync: populate on a background isolate, search, then disposeAndWait.
+  final big = await FuzzyCorpus.buildAsync(
+    List.generate(3000, (i) => 'item_$i'),
+    stringOf: (s) => s,
+    libraryPath: libPath,
+  );
+  if (big.length != 3000) throw 'buildAsync length ${big.length} != 3000';
+  if ((await big.fuzzyAsync('item_42', limit: 1)).isEmpty) {
+    throw 'buildAsync search failed';
+  }
+  await big.disposeAndWait();
 
   // FuzzyCrash API: install never throws; lastReport on a fresh path is null.
   FuzzyCrash.install();

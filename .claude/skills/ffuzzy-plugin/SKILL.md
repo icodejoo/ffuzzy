@@ -12,12 +12,13 @@ description: Use when developing, building, testing, or publishing the ffuzzy Fl
 >   对比/差分工具 `difftest/ perf/`,引擎内幕文档 `doc/INTERNALS.md`。
 > - **原生库名 `libffz`/`ffz.dll`、C 符号 `ffz_*`、FFI 查找名 `ffz_ffi_*`、C 编译宏 `FFZ_*` 保持不变**。
 >   **Dart 公开 API 全部 `Fuzzy*` 前缀**(2026-06-27 从 `Ffz*` 改名 + 重设计,对齐 Rust 版能力):
->   - `FuzzyCorpus<T>`(泛型对象搜索,构造传 `stringOf` 提取器;`FuzzyCorpus.strings(...)` 便捷构造纯字符串)。
->   - **模式是方法不是 flag**:`fuzzy`/`substring`/`prefix`/`postfix`/`exact`,各带 `…Async` 孪生(后台 isolate)。`FuzzyMode` 枚举已删,改为内部 int 常量。
->   - `FuzzyOptions`(可选、含默认值,聚合 `caseMatching`/`normalization`/`parallel`/`threads`/`limit`/`highlight`):构造函数设 corpus 级默认,方法上用可空命名参数逐字段覆盖(`copyWith` 合并)。
->   - 增删改:`add`/`addAll`/`addKeyed`/`update`/`removeAt`/`removeWhere`/`refresh`/`clear`。**原生 corpus 是 append-only,逐项删改在 Dart 侧 clear+重 add 重建(O(n));内部维护 `List<T> _items` + `List<List<FuzzyKey>?> _keys` 与原生下标 1:1**。
+>   - `FuzzyCorpus<T>`(泛型对象搜索,构造传 `stringOf`);便捷构造 `FuzzyCorpus.strings(items)`、`FuzzyCorpus.keyed(maps, field)`(List<Map> 按字段)、`FuzzyCorpus.buildAsync(items, stringOf:)`(后台 isolate 建库)。
+>   - **模式是方法不是 flag**:`fuzzy`/`substring`/`prefix`/`postfix`/`exact`,各带 `…Async` 孪生 + `…Single`/`…SingleAsync`(取最佳单条,返回 `FuzzyHit<T>?`)。`FuzzyMode` 枚举已删,改为内部 int 常量。
+>   - `FuzzyOptions`(可选、含默认值,聚合 `caseMatching`/`normalization`/`parallel`/`threads`/`limit`/`highlight`):构造设 corpus 级默认,方法上可空命名参数逐字段覆盖(`copyWith` 合并)。
+>   - 增删改:`add`/`addAll`/`addAllAsync`(后台 isolate)/`addKeyed`/`update`/`removeAt`/`removeWhere`(返回删除数)/`refresh([source])`(无参重建 / 传 source 整体替换)/`clear`。**没有"单独索引"概念——原生 corpus 即索引,`add` 即建;`clear` 全清,重建=重新 add。原生 append-only,逐项删改在 Dart 侧 clear+重 add 重建(O(n));内部 `List<T> _items` + `List<List<FuzzyKey>?> _keys` 与原生下标 1:1**。
+>   - **并发模型**:原生支持并发读、写需独占。同步搜索在调用 isolate 无竞争;`…Async` 搜索是并发读(各自私有 matcher scratch,安全);`addAllAsync` 是独占写(期间任何搜索/改/dispose 抛 `StateError`);搜索在飞时 mutate/`addAllAsync`/dispose 抛 `StateError`。**高频键入要"最新优先":同步搜天然最新;异步需 generation 守卫丢弃过期结果(example 已示范)**。`fuzzyAsync` 每次 = `Isolate.run` 一次性 isolate,高频别每键一发。
 >   - `FuzzyHit<T>`(带 `.obj` 原对象 + `index/score/matchedKind/matchedKey/indices`)、`FuzzyKey`/`FuzzyKeyKind`/`FuzzyCase`/`FuzzyNorm`、顶层 `fuzzyCodepointToUtf16`、`FuzzyException`、`FuzzyCrash`。
->   - 销毁/回收内存:`FuzzyCorpus.dispose()`(显式幂等)+ `NativeFinalizer` 兜底;异步在飞时 mutate/dispose 抛 `StateError`。
+>   - 销毁/回收内存:`FuzzyCorpus.dispose()`(显式幂等)/ `disposeAndWait()`(先等在飞异步)+ `NativeFinalizer` 兜底。
 > - **Rust + frb 引擎已废弃**,移到 `benchmark/`(包名 `ffuzzy_rust_bench`,`publish_to: none`),
 >   **仅用于 C-vs-Rust 性能对比**;`.pubignore` 已把 `benchmark/` 排除出发布包。
 > - 下面**关于 Rust/frb/cargokit/预编译/wasm 的所有章节都只适用于 `benchmark/` 里的遗留 Rust 包**;

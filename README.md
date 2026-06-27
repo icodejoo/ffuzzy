@@ -83,6 +83,14 @@ FuzzyCorpus<T>(
 
 // Convenience for plain strings (the item is its own search text):
 static FuzzyCorpus<String> FuzzyCorpus.strings(Iterable<String> items, {…})
+
+// Convenience for a List<Map> searched by one field; hit.obj is the whole map:
+static FuzzyCorpus<Map<String, dynamic>> FuzzyCorpus.keyed(
+    Iterable<Map<String, dynamic>> items, String field, {…})
+
+// Build a (large) corpus with the inserts on a background isolate — no UI jank:
+static Future<FuzzyCorpus<T>> FuzzyCorpus.buildAsync<T>(
+    Iterable<T> items, {required String Function(T) stringOf, …})
 ```
 
 Throws [`FuzzyException`](#fuzzyexception) if the native library can't be loaded.
@@ -93,17 +101,20 @@ Throws [`FuzzyException`](#fuzzyexception) if the native library can't be loaded
 |---|---|
 | `void add(T item)` | Append one item. |
 | `void addAll(Iterable<T> items)` | Append many (insertion order is the item `index`). |
+| `Future<void> addAllAsync(Iterable<T> items)` | Append many with the native inserts on a **background isolate** (no UI jank). Exclusive while running. |
 | `void addKeyed(T item, List<FuzzyKey> keys)` | Append `item` with [alternate search keys](#multi-key--cjk-transliteration). The original text (`stringOf(item)`) is added automatically. |
 | `void update(int index, T item)` | Replace the item at `index` (drops its alternate keys). |
 | `void removeAt(int index)` | Remove the item at `index`. |
-| `void removeWhere(bool Function(T) test)` | Remove every matching item. |
-| `void refresh()` | Rebuild after the text returned by `stringOf` changed for existing items. |
-| `void clear()` | Remove all items; the corpus stays usable. |
+| `int removeWhere(bool Function(T) test)` | Remove every matching item; returns how many were removed. |
+| `void refresh([Iterable<T>? source])` | No arg: re-add current items (after their `stringOf` text changed). With `source`: replace the entire data set. |
+| `void clear()` | Remove **all** items and the native index; the corpus object stays usable (re-`add`/`addAll` to repopulate). |
 | `int get length` | Number of items currently in the corpus. |
 
-> The native corpus is append-only, so `update` / `removeAt` / `removeWhere` /
-> `refresh` rebuild it in O(n). Cheap for occasional edits; for heavy churn
-> prefer rebuilding in a batch.
+> **There is no separate "index" to build** — the native corpus *is* the index,
+> and `add`/`addAll`/`addAllAsync` build it incrementally as you insert. `clear()`
+> empties it entirely; you "rebuild" simply by adding again (or `refresh`).
+> Because the native corpus is append-only, `update` / `removeAt` / `removeWhere`
+> / `refresh` rebuild it in O(n) — cheap for occasional edits; batch heavy churn.
 
 ### Search modes
 
@@ -125,6 +136,10 @@ List<FuzzyHit<T>> exact(String query, {…overrides});      Future<…> exactAsy
   int? threads, int? limit, bool? highlight}`): each non-null argument overrides
   the corresponding field of the corpus's [`FuzzyOptions`](#fuzzyoptions) for that
   call only. e.g. `corpus.fuzzy(q, limit: 50)`.
+- **Best single hit:** each mode also has a `…Single` / `…SingleAsync` variant
+  returning `FuzzyHit<T>?` (or `null`) — `fuzzySingle`, `substringSingle`,
+  `prefixSingle`, `postfixSingle`, `exactSingle` (+ `…Async`). Same override
+  params minus `limit` (forced to 1).
 
 `…Async` calls may overlap safely (each gets its own native matcher). While one
 is in flight, any mutation (`add`/`update`/`removeAt`/`clear`/…) or `dispose`
@@ -134,10 +149,11 @@ throws [`StateError`](#errors) (it would be a native use-after-free).
 
 | Member | Description |
 |---|---|
-| `void dispose()` | Free native memory now. Idempotent. Throws [`StateError`](#errors) if an async search is still in flight — await pending futures first. |
+| `void dispose()` | Free native memory now. Idempotent. Throws [`StateError`](#errors) if an async search/build is still in flight — await pending futures first. |
+| `Future<void> disposeAndWait()` | Like `dispose`, but first awaits any in-flight async search/build, so it never throws. |
 
 A `NativeFinalizer` frees the corpus automatically if you forget to `dispose`,
-but calling `dispose` is preferred for prompt release.
+but calling `dispose`/`disposeAndWait` is preferred for prompt release.
 
 ## `FuzzyOptions`
 
@@ -294,6 +310,56 @@ symbolize offline with the shipped `.debug` / `.pdb` / `.dSYM`. See
 [`doc/INTERNALS.md`](doc/INTERNALS.md) for the debug/release split.
 
 ---
+
+## High-frequency & large-corpus search
+
+**Building a large corpus** — `add`/`addAll` run on the calling isolate, so
+inserting hundreds of thousands of items janks the UI. Use
+[`FuzzyCorpus.buildAsync`](#constructors) (or `addAllAsync`) to do the native
+inserts on a background isolate instead. The build is *exclusive*: searching or
+mutating the corpus while it runs throws [`StateError`](#errors).
+
+**Data races** — the native corpus allows concurrent **readers** but needs an
+exclusive **writer**, and the binding enforces this so you can't trigger a race:
+
+- Synchronous `fuzzy`/`substring`/… run entirely on the calling isolate — no
+  concurrency, no race.
+- `…Async` searches read the corpus from worker isolates; multiple may overlap
+  safely (each gets its own native matcher scratch — reads don't mutate shared
+  state).
+- Any mutation (`add`/`update`/`removeAt`/`clear`/…), `addAllAsync`, or `dispose`
+  **while a search is in flight** throws `StateError`; likewise a search while an
+  async build is writing. Await (or [`disposeAndWait`](#lifecycle)) first.
+
+**Memory / CPU** — the resident corpus holds one native copy of every item's
+text (this is the index); the Dart side also keeps your `List<T>` to resolve
+`hit.obj`, so plan for roughly the text stored twice plus your objects. Searches
+allocate only a transient results buffer (freed immediately) — repeated
+searching does **not** grow memory. Note that `…Async` spawns a short-lived
+isolate per call, so firing one per keystroke is wasteful churn — see below.
+
+**Keeping the latest query's results (type-as-you-go)** — the library does not
+auto-cancel superseded searches (a native scan always runs to completion), so
+*you* decide which result wins:
+
+- **Small/medium corpus (≲100k): just search synchronously.** A sync `fuzzy(q)`
+  is ~1.4 ms for 100k items — well under a frame — and is inherently
+  latest-wins (the newest keystroke's result is the one you `setState`).
+- **Large corpus / heavy queries: use `…Async` + a generation guard** so an
+  out-of-order result from an older keystroke is dropped, and optionally a
+  debounce so you don't fan out an isolate per character:
+
+```dart
+int _gen = 0;
+Future<void> onQueryChanged(String q) async {
+  final gen = ++_gen;                       // newest query wins
+  final hits = await corpus.fuzzyAsync(q, limit: 50);
+  if (gen != _gen) return;                  // a newer keystroke superseded this
+  setState(() => _hits = hits);
+}
+```
+
+(The example app uses exactly this pattern.)
 
 ## Platforms & how the native library ships
 

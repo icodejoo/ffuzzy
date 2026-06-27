@@ -36,6 +36,7 @@ class SearchPage extends StatefulWidget {
 class _SearchPageState extends State<SearchPage> {
   late final FuzzyCorpus<String> _corpus;
   List<FuzzyHit<String>> _hits = const [];
+  int _searchGen = 0; // bumped per keystroke so only the latest result is shown
 
   @override
   void initState() {
@@ -50,9 +51,16 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   Future<void> _search(String q) async {
-    // fuzzyAsync keeps the UI smooth even for a large corpus.
+    // fuzzyAsync keeps the UI smooth even for a large corpus. Because searches
+    // can finish out of order under fast typing, tag each with a generation and
+    // apply only the latest — so the displayed results always match the newest
+    // query (never a stale one). (For a small corpus, a synchronous `_corpus
+    // .fuzzy(q)` is simpler and inherently latest-wins.)
+    final gen = ++_searchGen;
     final hits = await _corpus.fuzzyAsync(q, limit: 50);
-    if (mounted) setState(() => _hits = hits);
+    // Ignore if a newer keystroke superseded this, or the widget is gone.
+    if (!mounted || gen != _searchGen) return;
+    setState(() => _hits = hits);
   }
 
   @override
