@@ -74,6 +74,19 @@ export declare const FuzzyMode: {
 export type FuzzyMode = 0 | 1 | 2 | 3 | 4;
 
 // ---------------------------------------------------------------------------
+// FuzzyScoring — mirrors Dart's `FuzzyScoring` enum
+// ---------------------------------------------------------------------------
+export declare const FuzzyScoring: {
+  readonly fast:   0;
+  readonly off:    1;
+  readonly nucleo: 2;
+};
+/** `0` fast (rolling DP) · `1` off (no ranking) · `2` nucleo (full-matrix DP).
+ *  `off`/`nucleo` require the scoring-ABI engine; the legacy lite engine falls
+ *  back to `fast`. */
+export type FuzzyScoring = 0 | 1 | 2;
+
+// ---------------------------------------------------------------------------
 // FuzzyKeyKind — mirrors Dart's `FuzzyKeyKind` enum
 // ---------------------------------------------------------------------------
 export declare const FuzzyKeyKind: {
@@ -102,6 +115,7 @@ export declare class FuzzyKey {
 // ---------------------------------------------------------------------------
 /** Default search options for a corpus; individual fields can be overridden per call. */
 export declare class FuzzyOptions {
+  readonly scoring: FuzzyScoring;
   readonly caseMatching: FuzzyCase;
   readonly normalization: FuzzyNorm;
   readonly parallel: boolean;
@@ -109,6 +123,7 @@ export declare class FuzzyOptions {
   readonly limit: number;
   readonly highlight: boolean;
   constructor(init?: {
+    scoring?: FuzzyScoring;
     caseMatching?: FuzzyCase;
     normalization?: FuzzyNorm;
     parallel?: boolean;
@@ -184,10 +199,18 @@ export declare class FuzzyCorpus<T = string> {
     opts?: Omit<FuzzyCorpusInit<string>, 'stringOf'>,
   ): FuzzyCorpus<string>;
 
-  /** Record-map corpus searched by one string field. */
-  static keyed(
-    maps?: Iterable<Record<string, unknown>>,
-    field?: string,
+  /** Record-map corpus searched by one string [field]. */
+  static byKey(
+    maps: Iterable<Record<string, unknown>> | undefined,
+    field: string,
+    opts?: Omit<FuzzyCorpusInit<Record<string, unknown>>, 'stringOf'>,
+  ): FuzzyCorpus<Record<string, unknown>>;
+
+  /** Record-map corpus searched across multiple [fields]. First is the primary
+   *  key; the rest become alternate keys. `hit.matchedKey` is the field index. */
+  static byKeys(
+    maps: Iterable<Record<string, unknown>> | undefined,
+    fields: string[],
     opts?: Omit<FuzzyCorpusInit<Record<string, unknown>>, 'stringOf'>,
   ): FuzzyCorpus<Record<string, unknown>>;
 
@@ -195,7 +218,16 @@ export declare class FuzzyCorpus<T = string> {
 
   add(item: T): void;
   addAll(items: Iterable<T>): void;
-  addKeyed(item: T, keys: FuzzyKey[]): void;
+  /** Append [item] with explicit alternate search keys (pinyin/romaji/…). */
+  addKey(item: T, keys: FuzzyKey[]): void;
+  /** Replace the item at [index] (alternate keys dropped). O(n) rebuild. */
+  update(index: number, item: T): void;
+  /** Remove the item at [index]. O(n) rebuild. */
+  removeAt(index: number): void;
+  /** Remove every item matching [test]; returns how many were removed. */
+  removeWhere(test: (item: T) => boolean): number;
+  /** Re-add current items, or replace the whole data set when [source] is given. */
+  refresh(source?: Iterable<T>): void;
   clear(): void;
 
   /** Fuzzy (subsequence) search. Query supports `!`/`^`/`'`/`$` operators. */

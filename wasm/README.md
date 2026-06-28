@@ -88,11 +88,16 @@ corpus.fuzzy('query', { limit: 10, caseMatching: FuzzyCase.respect });
 ```ts
 import { FuzzyCorpus, FuzzyKey, FuzzyKeyKind } from '@codejoo/ffuzzy';
 
-corpus.addKeyed(item, [
+corpus.addKey(item, [
   FuzzyKey.kind('zhongguo', FuzzyKeyKind.pinyin),
   FuzzyKey.kind('zg',       FuzzyKeyKind.initials),
 ]);
 ```
+
+> Map corpora: `FuzzyCorpus.byKey(rows, 'name')` (one field) or
+> `FuzzyCorpus.byKeys(rows, ['name', 'email'])` (multi-field; `hit.matchedKey` is
+> the field index). Mutation: `add` / `addAll` / `addKey` / `update` / `removeAt`
+> / `removeWhere` / `refresh` / `clear`. Naming mirrors `ffuzzy.dart`.
 
 ## Hit highlighting
 

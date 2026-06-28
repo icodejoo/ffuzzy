@@ -62,6 +62,10 @@ export declare const FuzzyMode: {
 /** `0` fuzzy · `1` substring · `2` prefix · `3` postfix · `4` exact */
 export type FuzzyMode = 0 | 1 | 2 | 3 | 4;
 
+export declare const FuzzyScoring: { readonly fast: 0; readonly off: 1; readonly nucleo: 2 };
+/** `0` fast · `1` off · `2` nucleo (legacy lite engine falls back to `fast`). */
+export type FuzzyScoring = 0 | 1 | 2;
+
 export declare const FuzzyKeyKind: {
   readonly original: 0;
   readonly pinyin:   1;
@@ -80,6 +84,7 @@ export declare class FuzzyKey {
 }
 
 export declare class FuzzyOptions {
+  readonly scoring: FuzzyScoring;
   readonly caseMatching: FuzzyCase;
   readonly normalization: FuzzyNorm;
   readonly parallel: boolean;
@@ -87,6 +92,7 @@ export declare class FuzzyOptions {
   readonly limit: number;
   readonly highlight: boolean;
   constructor(init?: {
+    scoring?: FuzzyScoring;
     caseMatching?: FuzzyCase;
     normalization?: FuzzyNorm;
     parallel?: boolean;
@@ -115,11 +121,16 @@ export interface FuzzyCorpusInit<T> {
 export declare class FuzzyCorpus<T = string> {
   constructor(items?: Iterable<T>, init?: FuzzyCorpusInit<T>);
   static strings(items?: Iterable<string>, opts?: Omit<FuzzyCorpusInit<string>, 'stringOf'>): FuzzyCorpus<string>;
-  static keyed(maps?: Iterable<Record<string, unknown>>, field?: string, opts?: Omit<FuzzyCorpusInit<Record<string, unknown>>, 'stringOf'>): FuzzyCorpus<Record<string, unknown>>;
+  static byKey(maps: Iterable<Record<string, unknown>> | undefined, field: string, opts?: Omit<FuzzyCorpusInit<Record<string, unknown>>, 'stringOf'>): FuzzyCorpus<Record<string, unknown>>;
+  static byKeys(maps: Iterable<Record<string, unknown>> | undefined, fields: string[], opts?: Omit<FuzzyCorpusInit<Record<string, unknown>>, 'stringOf'>): FuzzyCorpus<Record<string, unknown>>;
   readonly length: number;
   add(item: T): void;
   addAll(items: Iterable<T>): void;
-  addKeyed(item: T, keys: FuzzyKey[]): void;
+  addKey(item: T, keys: FuzzyKey[]): void;
+  update(index: number, item: T): void;
+  removeAt(index: number): void;
+  removeWhere(test: (item: T) => boolean): number;
+  refresh(source?: Iterable<T>): void;
   clear(): void;
   fuzzy    (query: string, opts?: Partial<FuzzyOptions>): FuzzyHit<T>[];
   substring(query: string, opts?: Partial<FuzzyOptions>): FuzzyHit<T>[];

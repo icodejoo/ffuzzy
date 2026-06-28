@@ -40,7 +40,7 @@ emcc $OPT -std=c11 -DFFZ_NO_THREADS -I"$ROOT/include" \
   -o "$WASM/ffuzzy.engine.mjs" \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=ffuzzyModule \
   -sSINGLE_FILE=1 \
-  -sENVIRONMENT=web,worker,node \
+  -sENVIRONMENT=web,worker \
   -sALLOW_MEMORY_GROWTH=1 -sFILESYSTEM=0 \
   -sEXPORTED_FUNCTIONS="$EXPORTS" \
   -sEXPORTED_RUNTIME_METHODS="$RUNTIME"
