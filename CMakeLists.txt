@@ -46,6 +46,12 @@ add_library(ffz SHARED ${FFZ_SRCS})
 target_include_directories(ffz PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(ffz PRIVATE c_std_11)
 
+# ffz_corpus.c parallel scan uses pthreads on POSIX. glibc>=2.34 folds libpthread
+# into libc, but musl / old glibc / non-glibc need it linked explicitly. No-op on
+# Win32 (the corpus uses CreateThread there). Threads::Threads adds -pthread.
+find_package(Threads REQUIRED)
+target_link_libraries(ffz PRIVATE Threads::Threads)
+
 if(NOT FFZ_LOCATABLE)
   target_compile_definitions(ffz PRIVATE NDEBUG)
   set_target_properties(ffz PROPERTIES C_VISIBILITY_PRESET hidden)

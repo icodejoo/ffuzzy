@@ -19,6 +19,12 @@ static unsigned ffz_cpu_count(void) {
     GetSystemInfo(&si);
     return si.dwNumberOfProcessors ? si.dwNumberOfProcessors : 1;
 }
+#elif defined(FFZ_NO_THREADS)
+// Single-thread build (e.g. wasm without -pthread): no thread API at all.
+// resolve_threads() returns 1 because ffz_cpu_count()==1, so the thr_* helpers
+// are never called and the corpus filter runs serially.
+typedef int ffz_thr;
+static unsigned ffz_cpu_count(void) { return 1; }
 #else
 #include <pthread.h>
 #include <unistd.h>
@@ -406,6 +412,10 @@ static bool thr_start(scan_job *j, ffz_thr *out) {
     return true;
 }
 static void thr_join(ffz_thr t) { WaitForSingleObject(t, INFINITE); CloseHandle(t); }
+#elif defined(FFZ_NO_THREADS)
+// Never called (resolve_threads()==1); present so the serial path links.
+static bool thr_start(scan_job *j, ffz_thr *out) { (void)j; (void)out; return false; }
+static void thr_join(ffz_thr t) { (void)t; }
 #else
 static void *scan_trampoline(void *p) { scan_job_run((scan_job *)p); return NULL; }
 static bool thr_start(scan_job *j, ffz_thr *out) {

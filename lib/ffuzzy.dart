@@ -632,6 +632,15 @@ class FuzzyCorpus<T> implements Finalizable {
   int _inFlight = 0; // in-flight async searches (concurrent readers, OK)
   bool _building = false; // an async build is writing the corpus (exclusive)
   Completer<void>? _idle; // completes when fully idle (for disposeAndWait)
+  int _estBytes = 0; // ~UTF-8 bytes handed to native; the finalizer's GC-pressure hint
+
+  // Re-arm the NativeFinalizer with the current native footprint so GC sees the
+  // real memory pressure (attach takes externalSize once; detach+attach updates
+  // it). detach(this) clears the prior arming, so exactly one stays attached.
+  void _refreshFinalizer() {
+    _l.finalizer.detach(this);
+    _l.finalizer.attach(this, _ptr.cast(), detach: this, externalSize: _estBytes);
+  }
 
   // Concurrency model: the native corpus tolerates concurrent *readers* (each
   // search uses its own matcher scratch), but a writer must be exclusive. So a
@@ -678,6 +687,7 @@ class FuzzyCorpus<T> implements Finalizable {
     _items.add(item);
     _keys.add(null);
     _nativeAdd(item, null);
+    _refreshFinalizer();
   }
 
   /// Append many items (insertion order becomes each hit's [FuzzyHit.index]).
@@ -688,6 +698,7 @@ class FuzzyCorpus<T> implements Finalizable {
       _keys.add(null);
       _nativeAdd(it, null);
     }
+    _refreshFinalizer();
   }
 
   /// Asynchronously append [items], doing the native inserts on a background
@@ -724,6 +735,10 @@ class FuzzyCorpus<T> implements Finalizable {
       });
       _items.addAll(list);
       _keys.addAll(List<List<FuzzyKey>?>.filled(list.length, null));
+      // Worker added via lib.add (not _nativeAdd), so update the GC hint here.
+      // Approximate: UTF-16 length (== bytes for ASCII, under-counts multibyte).
+      for (final s in texts) { _estBytes += s.length; }
+      _refreshFinalizer();
     } catch (primaryError, primaryStack) {
       // The worker failed mid-build; restore native to match the Dart mirror
       // (which still holds only the pre-build items) so indices stay 1:1.
@@ -868,13 +883,17 @@ class FuzzyCorpus<T> implements Finalizable {
     _items.clear();
     _keys.clear();
     _l.clear(_ptr);
+    _estBytes = 0;
+    _refreshFinalizer();
   }
 
   void _rebuild() {
     _l.clear(_ptr);
+    _estBytes = 0;
     for (var i = 0; i < _items.length; i++) {
       _nativeAdd(_items[i], _keys[i]);
     }
+    _refreshFinalizer();
   }
 
   void _nativeAdd(T item, List<FuzzyKey>? keys) {
@@ -882,6 +901,7 @@ class FuzzyCorpus<T> implements Finalizable {
     if (keys == null) {
       final u = s._toUtf8();
       _l.add(_ptr, u.ptr, u.len);
+      _estBytes += u.len;
       malloc.free(u.ptr);
       return;
     }
@@ -891,6 +911,7 @@ class FuzzyCorpus<T> implements Finalizable {
     }
     final iu = s._toUtf8();
     try {
+      _estBytes += iu.len;
       // Allocate arrays inside the outer try so iu.ptr is freed even if
       // any of these mallocs throw (e.g. OOM).
       final n = keys.length;
@@ -905,6 +926,7 @@ class FuzzyCorpus<T> implements Finalizable {
           lens[i] = ku.len;
           kinds[i] = keys[i].kind;
           keyPtrs.add(ku.ptr);
+          _estBytes += ku.len;
         }
         f(_ptr, iu.ptr, iu.len, texts, lens, kinds, n);
       } finally {

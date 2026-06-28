@@ -158,6 +158,10 @@ static void emit_report(const ffz_report *r) {
     ssize_t w = write(STDERR_FILENO, r->buf, r->len); (void)w;
 #if defined(__ANDROID__)
     // logcat lines are bounded; the breadcrumb file is the full record.
+    // __android_log_write reads buf as a C-string, but the report builder never
+    // writes a terminator (rep_str caps len at CAP-1, so buf[len] is in bounds).
+    // Without this it would walk uninitialized stack past r->len.
+    ((char *)r->buf)[r->len] = '\0';
     __android_log_write(ANDROID_LOG_FATAL, "ffz", r->buf);
 #endif
     if (g_breadcrumb[0]) {

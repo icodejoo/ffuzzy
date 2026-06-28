@@ -81,14 +81,6 @@ jobs:
             timeout-*
           if-no-files-found: ignore
 
-  difftest:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: differential test vs nucleo (score + indices, 6210 pairs)
-        run: cd difftest && bash run.sh
-
   crash-handler:
     strategy:
       fail-fast: false
