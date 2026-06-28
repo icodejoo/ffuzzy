@@ -41,19 +41,19 @@ build/
 *.a
 *.exe
 tools/__pycache__/
-difftest/target/
-difftest/Cargo.lock
-difftest/difftest_c
-difftest/out_rust.txt
-difftest/out_c.txt
-difftest/diff.txt
-perf/target/
-perf/Cargo.lock
-perf/perf_c
-perf/data_ascii.txt
-perf/data_cjk.txt
-perf/q_*.txt
-perf/results.csv
+tests/difftest/target/
+tests/difftest/Cargo.lock
+tests/difftest/difftest_c
+tests/difftest/out_rust.txt
+tests/difftest/out_c.txt
+tests/difftest/diff.txt
+tests/perf/target/
+tests/perf/Cargo.lock
+tests/perf/perf_c
+tests/perf/data_ascii.txt
+tests/perf/data_cjk.txt
+tests/perf/q_*.txt
+tests/perf/results.csv
 
 # 编译产物(DLL/so/dylib)不入库
 *.dll
