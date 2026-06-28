@@ -1,6 +1,6 @@
 ---
 name: ffuzzy-plugin
-description: Use when developing, building, testing, or publishing the ffuzzy Flutter fuzzy-search plugin. The published `ffuzzy` package is now the pure-C engine AT THE REPO ROOT (lib/ffuzzy.dart + src/ ffi/ include/ + platform dirs). The old Rust + flutter_rust_bridge engine is DEPRECATED, lives under benchmark/, and is kept only for performance comparison. Covers project layout, the public Dart API, the C build/test workflow, environment gotchas on this machine, and pub.dev publishing.
+description: Use when developing, building, testing, or publishing the ffuzzy Flutter fuzzy-search plugin. The published `ffuzzy` package is the pure-C engine AT THE REPO ROOT (lib/ffuzzy.dart + src/ ffi/ include/ + platform dirs). A WASM port is published to npm as `@codejoo/ffuzzy` (wasm/). The old Rust + flutter_rust_bridge engine has been removed. Covers project layout, the public Dart API, the C build/test workflow, the wasm/npm package, environment gotchas on this machine, and pub.dev publishing.
 ---
 
 # ffuzzy 插件开发指南
@@ -9,9 +9,8 @@ description: Use when developing, building, testing, or publishing the ffuzzy Fl
 > 入口 `lib/ffuzzy.dart`，C 源在 `src/ ffi/ include/`，平台目录
 > `android/ios/macos/linux/windows/`，示例 `example/`，引擎内幕 `doc/INTERNALS.md`。
 >
-> **Rust + frb 引擎已废弃**，移到 `benchmark/`（包名 `ffuzzy_rust_bench`，`publish_to: none`），
-> 仅用于 C-vs-Rust 性能对比；`.pubignore` 已把 `benchmark/` 排除出发布包。
-> C(FFI) 在 **web 上不可用**。
+> **旧 Rust + frb 引擎已删除**(连同 `benchmark/`、差分测试 `tests/difftest/`、`tests/perf/`)。
+> C(FFI) 在 **web 上不可用** —— web 用 `wasm/` 的 npm 包 `@codejoo/ffuzzy`(见末节)。
 
 ## 工程结构
 
@@ -31,7 +30,7 @@ ffuzzy/                         ← 仓库根 = 发布包根
 ├── example/                    # 演示 App
 ├── test/                       # Flutter 单元测试（flutter test）
 ├── tool/ffi_smoke.dart         # 冒烟脚本（dart run tool/ffi_smoke.dart）
-└── benchmark/                  # 废弃 Rust 引擎，仅对比用
+└── wasm/                       # WASM/npm 包 @codejoo/ffuzzy（见末节）
 ```
 
 ## 公开 Dart API（`package:ffuzzy/ffuzzy.dart`）
@@ -197,8 +196,5 @@ npm publish            # publishConfig.access=public 已设
 - lite = `lite-tables.c` 空表 + `-DFFZ_COMPACT_CLASS`（砍 unicode 表 + class 表；**无 `FFZ_ASCII_NORM` 宏**）。
 - 体积：bundle `ffuzzy.js` 62KB(gzip 26) / `ffuzzy-lite.js` 48KB(gzip 19)。
 
-## benchmark/（废弃 Rust 引擎，仅对比用）
-
-Rust [`nucleo-matcher`](https://crates.io/crates/nucleo) 经 [`flutter_rust_bridge`](https://pub.dev/packages/flutter_rust_bridge)(frb 2.12.0) + cargokit 暴露给 Dart。**不再用于发布。**
-
-Rust/frb/cargokit/预编译 的细节只适用于 `benchmark/` 里的遗留包（注意：WASM 现是 `wasm/` 的正式 npm 包，见上节，不再属 benchmark）。
+> 注：旧 Rust + frb 引擎(原 `benchmark/`)及差分/perf 测试(`tests/difftest`、`tests/perf`)已删除。
+> 引擎与 nucleo 0.3.1 的逐字节一致性是历史已验证保证(见 `doc/INTERNALS.md`)。

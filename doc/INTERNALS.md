@@ -1,8 +1,8 @@
 # ffz — a small C fuzzy matcher
 
 A standalone C reimplementation of [`nucleo-matcher`](https://github.com/helix-editor/nucleo)
-0.3.1 (the deprecated Rust engine, now in `benchmark/`, behind the `ffuzzy` Flutter plugin), plus an **index layer
-with a transliteration hook** for pinyin / romaji / initials search.
+0.3.1, plus an **index layer with a transliteration hook** for pinyin / romaji /
+initials search.
 
 Two build modes:
 
@@ -53,22 +53,15 @@ make lib      # build build/libffz.a
 make size     # report -Os section sizes
 ```
 
-### Differential test vs the Rust engine
+### Parity with nucleo
 
-`difftest/` compares `ffz_pattern` against **nucleo-matcher 0.3.1** (the deprecated Rust engine, now in `benchmark/`,
-the `rust/` crate wraps), checking score + indices byte-for-byte over every
-`(query, haystack)` pair. Requires `cargo` + `gcc`.
-
-```sh
-cd difftest && bash run.sh
-# -> PASS: all 6210 (query,haystack) pairs identical (score + indices).
-```
-
-The runner regenerates the exact class table and builds the C side with
-`-DFFZ_NUCLEO_SUBSTRING_BUGCOMPAT`, so it reaches **byte-identical** scores AND
-indices over a 90×69 adversarial corpus (repeated-char DP backtracking, accented
-camelCase, non-ASCII digits/symbols/emoji, kana, Cyrillic/Greek case, ligatures,
-substring tails). See `difftest/EDGE_CASES.md` for the two flags this requires.
+The engine was verified **byte-identical to nucleo-matcher 0.3.1** — score AND
+indices over all 6210 `(query, haystack)` pairs of a 90×69 adversarial corpus
+(repeated-char DP backtracking, accented camelCase, non-ASCII digits/symbols/
+emoji, kana, Cyrillic/Greek case, ligatures, substring tails), with
+`-DFFZ_NUCLEO_SUBSTRING_BUGCOMPAT` for the one nucleo substring-tail quirk. The
+differential harness (and the Rust engine it compared against) has since been
+removed; parity is a historical guarantee of the current scoring code.
 
 ## Design notes
 

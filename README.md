@@ -444,8 +444,7 @@ the Rust `nucleo` engine):
 
 The full methodology, the differential-test guarantee (6210/6210 byte-identical
 to nucleo), Unicode coverage, sizing, and the engine design live in
-[`doc/INTERNALS.md`](doc/INTERNALS.md). The deprecated Rust engine is retained
-under [`benchmark/`](benchmark/) purely to reproduce these comparisons.
+[`doc/INTERNALS.md`](doc/INTERNALS.md).
 
 ## License
 

@@ -400,8 +400,7 @@ Dart 侧通过 `ffz.dll` / `libffz.so` 加载,或在 Apple 上经 `DynamicLibrar
 | 过滤(fuzzy, top-50) | 1.36 ms | 1.65 ms |
 
 完整方法学、差分测试保证(6210/6210 与 nucleo 逐字节一致)、Unicode 覆盖、体积、引擎设计,
-都在 [`doc/INTERNALS.md`](doc/INTERNALS.md)。已废弃的 Rust 引擎保留在
-[`benchmark/`](benchmark/),仅用于复现这些对比。
+都在 [`doc/INTERNALS.md`](doc/INTERNALS.md)。
 
 ## 许可
 
