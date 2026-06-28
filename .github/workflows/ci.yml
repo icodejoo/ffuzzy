@@ -1,14 +1,14 @@
 name: CI (C engine)
 
 # Functional + safety verification of the C matcher and its Dart FFI binding
-# across Linux / macOS / Windows / Android: unit + leak + differential (vs Rust
-# nucleo) tests, ASan/UBSan, a libFuzzer run, the native crash handler, the
-# CMake debug/release auto-switch, Apple compiles, and an end-to-end Dart smoke.
+# across Linux / macOS / Windows / Android: unit + leak tests, ASan/UBSan, a
+# libFuzzer run, the native crash handler, the CMake debug/release auto-switch,
+# Apple compiles, and an end-to-end Dart smoke.
 on:
   push:
-    paths-ignore: ['benchmark/**', '**/*.md']
+    paths-ignore: ['**/*.md']
   pull_request:
-    paths-ignore: ['benchmark/**', '**/*.md']
+    paths-ignore: ['**/*.md']
 
 jobs:
   unit-leak:

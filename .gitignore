@@ -47,19 +47,6 @@ build/
 *.map
 *.exe
 tools/__pycache__/
-tests/difftest/target/
-tests/difftest/Cargo.lock
-tests/difftest/difftest_c
-tests/difftest/out_rust.txt
-tests/difftest/out_c.txt
-tests/difftest/diff.txt
-tests/perf/target/
-tests/perf/Cargo.lock
-tests/perf/perf_c
-tests/perf/data_ascii.txt
-tests/perf/data_cjk.txt
-tests/perf/q_*.txt
-tests/perf/results.csv
 
 # 编译产物(DLL/so/dylib)不入库
 *.so
@@ -70,11 +57,15 @@ build_arm64/
 build_armeabi/
 build_x86_64/
 
-# 旧 Rust 基准(仅本地对比用)的构建产物、便携 bundle 与签名私钥
-rust/target/
-ffuzzy.bundle
-benchmark/ffuzzy.bundle
-precompiled_signing_key.PRIVATE.txt
+# 本地工具/编辑器配置(.claude/skills 仍跟踪)
+.claude/settings.json
+.claude/settings.local.json
+
+# Gradle 缓存
+**/.gradle/
+
+# 示例的 windows 桌面脚手架(按需 flutter create 再生)
+/example/windows/
 
 # Flutter ephemeral 目录(flutter pub get/build 自动生成)
 **/flutter/ephemeral/
