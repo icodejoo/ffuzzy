@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.0
+
+- **New: scoring modes.** A `scoring:` parameter on `FuzzyOptions` and on every
+  search method selects the ranking algorithm via the `FuzzyScoring` enum:
+  - `fast` (default) — 2-row rolling DP, tuned for names / paths / symbols.
+  - `off` — no ranking; results returned in insertion order (ID / unique-match).
+  - `nucleo` — full-matrix DP, highest fidelity (~2× CPU).
+- **Performance.** SIMD reverse scan (`ffz_rfind_ci`) speeds the prefilter tail
+  window 20–30%; an ASCII fast path in the rolling preprocess loop adds ~5–10%
+  on ASCII input.
+- **Hardening** (from a multi-agent security / correctness review):
+  - Cap the FAST rolling DP and the per-query atom count so hostile input can't
+    drive a CPU hang.
+  - Saturate the greedy scorer so a very long match can't wrap its 16-bit score
+    and rank below a poor one.
+  - `add` / `addAll` / `addKey` now perform the native insert *before* updating
+    the Dart mirror, so a failed native add can't desync the corpus and return
+    the wrong items afterwards.
+  - Use `ptrdiff_t` for substring positions (correct on 64-bit Windows for
+    >2 GB inputs); link `Threads::Threads` (musl / older glibc); NUL-terminate
+    the Android crash log; honor `FFZ_NO_THREADS`; ship the Android `x86` ABI.
+
 ## 0.3.1
 
 **The `ffuzzy` engine is now the compact C matcher** (previously a separate `ffz`

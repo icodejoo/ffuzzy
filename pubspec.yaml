@@ -3,7 +3,7 @@ description: >-
   Fast fuzzy search for Flutter, powered by a compact C engine via dart:ffi:
   fuzzy/substring/prefix/postfix/exact matching over a resident corpus,
   multi-threading, async filtering, hit highlighting, and Unicode (CJK).
-version: 0.3.1
+version: 0.4.0
 repository: https://github.com/icodejoo/ffuzzy
 homepage: https://github.com/icodejoo/ffuzzy
 issue_tracker: https://github.com/icodejoo/ffuzzy/issues

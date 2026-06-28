@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'ffuzzy'
-  s.version          = '0.3.1'
+  s.version          = '0.4.0'
   s.summary          = 'ffz C fuzzy matcher (nucleo-compatible).'
   s.description      = 'Fuzzy/substring/prefix/postfix/exact matching engine in C.'
   s.homepage         = 'https://github.com/icodejoo/ffuzzy'

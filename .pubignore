@@ -21,3 +21,10 @@ tools/
 
 # 旧 Rust 引擎,仅作本地性能对比,不随发布包分发
 benchmark/
+
+# Dev-only: internal planning docs, build/codegen scripts, and the separate
+# npm (@codejoo/ffuzzy) WASM distribution — none belong in the Dart package.
+docs/
+scripts/
+wasm/
+.claude/
