@@ -30,11 +30,15 @@ on its own. The native library is **~32 KB** stripped.
 
 ```yaml
 dependencies:
-  ffuzzy: ^0.3.1
+  ffuzzy: ^0.4.0
 ```
 
 > **No platform setup required** — the C sources are compiled and bundled automatically
 > by each platform's SDK on `flutter build`. Consumers need no extra toolchain (NDK, Xcode flags, etc.).
+
+> **Web / JS?** This Flutter package is FFI-only (no web). For the browser / Node,
+> use the WASM port [`@codejoo/ffuzzy`](https://www.npmjs.com/package/@codejoo/ffuzzy)
+> (same C engine; `await ffuzzyInitialize()` then the same `FuzzyCorpus` API).
 
 ## Quick start
 

@@ -170,8 +170,35 @@ flutter pub publish
 
 ---
 
+## wasm/（Web 包 @codejoo/ffuzzy，已发布到 npm）
+
+同一份 C 引擎编成 WASM，作为独立 **npm 包** 发布（目录 `wasm/`，已全部纳入 git）。与 Flutter 包独立。
+
+**目录（扁平）**：
+- `ffuzzy-corpus.mjs` — 手写 wrapper（高层 API，唯一源），追加进每个 engine。
+- `ffuzzy.engine.mjs` / `ffuzzy-lite.engine.mjs` — emcc 产物（SINGLE_FILE，wasm 以 `binaryDecode` 二进制串内联，**非 base64**），构建输入。
+- `ffuzzy.js` / `ffuzzy-lite.js` — 发布产物 = engine + wrapper。
+- `ffuzzy.d.ts` / `ffuzzy-lite.d.ts` — 手写类型。
+- `lite-tables.c` — 空表 stub（lite 用，passthrough）。
+- `build-engine.sh`（emcc）/ `build.mjs`（node 拼包）/ `test/smoke.test.mjs`。
+
+**构建命令**：
+```bash
+cd wasm
+npm run build          # 快路：engine + wrapper -> *.js（改 wrapper 后用）
+npm run build:engine   # 慢路：emcc 重编 engine（需 source emsdk_env.sh）
+npm test               # build + node --test（10/10）
+npm publish            # publishConfig.access=public 已设
+```
+
+**关键约束**：
+- engine 必须 `-sENVIRONMENT=web,worker`（**不带 node**，否则 `node:module` import 让浏览器打包器报错；web,worker 仍能在 node 跑因 wasm 内联）。
+- **API 对齐 Dart**：`await ffuzzyInitialize()` 一次 → 同步用 `FuzzyCorpus.strings/byKey/byKeys`（非 keyed）、`addKey`（非 addKeyed）、`update/removeAt/removeWhere/refresh`、`FuzzyScoring`。WASM 模块藏内部不传句柄。
+- lite = `lite-tables.c` 空表 + `-DFFZ_COMPACT_CLASS`（砍 unicode 表 + class 表；**无 `FFZ_ASCII_NORM` 宏**）。
+- 体积：bundle `ffuzzy.js` 62KB(gzip 26) / `ffuzzy-lite.js` 48KB(gzip 19)。
+
 ## benchmark/（废弃 Rust 引擎，仅对比用）
 
 Rust [`nucleo-matcher`](https://crates.io/crates/nucleo) 经 [`flutter_rust_bridge`](https://pub.dev/packages/flutter_rust_bridge)(frb 2.12.0) + cargokit 暴露给 Dart。**不再用于发布。**
 
-关于 Rust/frb/cargokit/预编译/wasm/体积优化 的所有操作细节只适用于 `benchmark/` 里的遗留包。
+Rust/frb/cargokit/预编译 的细节只适用于 `benchmark/` 里的遗留包（注意：WASM 现是 `wasm/` 的正式 npm 包，见上节，不再属 benchmark）。
