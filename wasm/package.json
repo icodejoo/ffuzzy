@@ -1,6 +1,6 @@
 {
   "name": "@codejoo/ffuzzy",
-  "version": "0.3.1",
+  "version": "0.5.0",
   "description": "Fast fuzzy search for the web — WASM port of the ffuzzy C engine. Five search modes, Unicode, TypeScript, browser + Node.",
   "type": "module",
   "exports": {
@@ -20,6 +20,9 @@
     "ffuzzy-lite.d.ts",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "bash ../scripts/build-wasm.sh",
     "prepublishOnly": "node --input-type=module -e \"import{existsSync}from'node:fs';if(!existsSync('ffuzzy.js')){console.error('Run npm run build first');process.exit(1)}\""

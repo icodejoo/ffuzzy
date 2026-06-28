@@ -12,31 +12,39 @@ npm install @codejoo/ffuzzy
 
 ## Quick start
 
-```ts
-import ffuzzyModule, { FuzzyCorpus } from '@codejoo/ffuzzy';
+The WASM module is managed internally — call `ffuzzyInitialize()` once at
+startup, then use `FuzzyCorpus` synchronously, exactly like the Dart API (no
+module handle to pass around).
 
-const M = await ffuzzyModule();
+```ts
+import { ffuzzyInitialize, FuzzyCorpus } from '@codejoo/ffuzzy';
+
+await ffuzzyInitialize();   // once at startup (WASM instantiation is async)
 
 // Plain strings
-const corpus = FuzzyCorpus.strings(M, ['src/main.ts', 'README.md', 'package.json']);
+const corpus = FuzzyCorpus.strings(['src/main.ts', 'README.md', 'package.json']);
 corpus.fuzzy('src').forEach(h => console.log(h.obj, h.score));
 corpus.dispose();
 
 // Generic objects — hits carry the original object
-const files = new FuzzyCorpus(M, myFiles, { stringOf: f => f.path });
+const files = new FuzzyCorpus(myFiles, { stringOf: f => f.path });
 const hit = files.prefix('src/')[0];
 hit.obj;  // original object
 files.dispose();
 ```
+
+> Why the one `await`? WASM is instantiated asynchronously on the main thread
+> (browsers forbid synchronous compilation of modules >4 KB), so the engine must
+> be readied once. After that, every call is synchronous.
 
 ## Lite build
 
 ~14 KB smaller; covers ASCII + CJK. No Cyrillic/Greek case-fold or accent-strip.
 
 ```ts
-import ffuzzyModuleLite, { FuzzyCorpus } from '@codejoo/ffuzzy/lite';
+import { ffuzzyInitialize, FuzzyCorpus } from '@codejoo/ffuzzy/lite';
 
-const M = await ffuzzyModuleLite();
+await ffuzzyInitialize();
 ```
 
 ## Search modes
@@ -56,7 +64,7 @@ corpus.exact    ('main.ts') // whole-string match
 ```ts
 import { FuzzyCorpus, FuzzyCase, FuzzyNorm } from '@codejoo/ffuzzy';
 
-const corpus = new FuzzyCorpus(M, items, {
+const corpus = new FuzzyCorpus(items, {
   stringOf: item => item.name,
   options: {
     caseMatching: FuzzyCase.smart,    // 0 respect · 1 ignore · 2 smart (default)
@@ -101,7 +109,7 @@ const u16 = fuzzyCodepointToUtf16(hit.obj, hit.indices);
 ## `using` statement
 
 ```ts
-using corpus = FuzzyCorpus.strings(M, items); // auto-disposed at scope exit
+using corpus = FuzzyCorpus.strings(items); // auto-disposed at scope exit
 ```
 
 ## FuzzyHit shape
