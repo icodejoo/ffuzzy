@@ -119,10 +119,10 @@ static int32_t exact_impl(ffz_matcher *m, ffz_str hay, ffz_str needle,
 
 // --- substring (incl. single char) ---------------------------------------
 // ASCII substring: SWAR/memchr the first byte, verify, keep best-bonus match.
-static long substring_best_ascii(const ffz_config *cfg, const uint8_t *h,
+static ptrdiff_t substring_best_ascii(const ffz_config *cfg, const uint8_t *h,
                                  size_t hn, const uint8_t *nd, size_t nl) {
     bool ic = cfg->ignore_case;
-    long best = -1;
+    ptrdiff_t best = -1;
     uint16_t best_score = 0;
     size_t pos = 0;
     while (pos + nl <= hn) {
@@ -145,7 +145,7 @@ static long substring_best_ascii(const ffz_config *cfg, const uint8_t *h,
                                         FFZ_SCORE_MATCH);
             if (score > best_score) {
                 best_score = score;
-                best = (long)start;
+                best = (ptrdiff_t)start;
                 if (bonus >= cfg->bonus_boundary_white) break;
             }
         }
@@ -156,9 +156,9 @@ static long substring_best_ascii(const ffz_config *cfg, const uint8_t *h,
 
 // Unicode substring (scalar). nucleo's non-ASCII substring has a tail
 // off-by-one; reproduce it under bugcompat (haystack here is always non-ASCII).
-static long substring_best_uni(const ffz_config *cfg, const uint32_t *h,
+static ptrdiff_t substring_best_uni(const ffz_config *cfg, const uint32_t *h,
                                size_t hn, ffz_str needle, size_t nl) {
-    long best = -1;
+    ptrdiff_t best = -1;
     uint16_t best_score = 0;
     size_t last_start = hn - nl;
 #ifdef FFZ_NUCLEO_SUBSTRING_BUGCOMPAT
@@ -179,14 +179,14 @@ static long substring_best_uni(const ffz_config *cfg, const uint32_t *h,
                                     FFZ_SCORE_MATCH);
         if (score > best_score) {
             best_score = score;
-            best = (long)i;
+            best = (ptrdiff_t)i;
             if (bonus >= cfg->bonus_boundary_white) break;
         }
     }
     return best;
 }
 
-static long substring_best(ffz_matcher *m, ffz_str hay, ffz_str needle) {
+static ptrdiff_t substring_best(ffz_matcher *m, ffz_str hay, ffz_str needle) {
     const ffz_config *cfg = &m->cfg;
     size_t nl = needle.len, hn = hay.len;
     if (nl > hn) return -1;
@@ -203,7 +203,7 @@ static int32_t substring_match(ffz_matcher *m, ffz_str hay, ffz_str needle,
     if (nl == 0) return 0;
     if (nl > hn) return -1;
     if (nl == hn) return exact_impl(m, hay, needle, 0, hn, out);
-    long pos = substring_best(m, hay, needle);
+    ptrdiff_t pos = substring_best(m, hay, needle);
     if (pos < 0) return -1;
     return (int32_t)ffz_calculate_score(m, hay, needle, (size_t)pos,
                                         (size_t)pos + nl, out);
@@ -245,7 +245,7 @@ static int32_t ffz_match_impl(ffz_matcher *m, ffz_str haystack, ffz_str needle,
             if (nl == hn)
                 return exact_impl(m, haystack, needle, 0, hn, out);
             if (nl == 1) {
-                long pos = substring_best(m, haystack, needle);
+                ptrdiff_t pos = substring_best(m, haystack, needle);
                 if (pos < 0) return -1;
                 return (int32_t)ffz_calculate_score(m, haystack, needle,
                                                     (size_t)pos, (size_t)pos + 1, out);
@@ -288,7 +288,8 @@ static int32_t ffz_match_impl(ffz_matcher *m, ffz_str haystack, ffz_str needle,
                     return 0;
                 case FFZ_SCORE_FAST:
                     if (!out)
-                        return ffz_fuzzy_rolling(m, haystack, needle, start, end);
+                        return ffz_fuzzy_rolling(m, haystack, needle, start,
+                                                 greedy_end, end);
                     return ffz_fuzzy_greedy(m, haystack, needle, start, greedy_end,
                                            out);
                 default: /* FFZ_SCORE_NUCLEO */

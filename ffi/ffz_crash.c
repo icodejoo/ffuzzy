@@ -45,7 +45,9 @@ static void rep_hex(ffz_report *r, uint64_t v) {
 }
 static void rep_dec(ffz_report *r, long v) {
     char tmp[24]; int i = 23; tmp[i--] = '\0';  // fits LONG_MIN (20 digits + '-')
-    int neg = v < 0; unsigned long u = neg ? (unsigned long)(-v) : (unsigned long)v;
+    // Negate in the unsigned domain: -v on LONG_MIN is signed-overflow UB.
+    int neg = v < 0;
+    unsigned long u = neg ? (0UL - (unsigned long)v) : (unsigned long)v;
     if (u == 0) tmp[i--] = '0';
     while (u && i >= 0) { tmp[i--] = (char)('0' + (u % 10)); u /= 10; }
     if (neg && i >= 0) tmp[i--] = '-';

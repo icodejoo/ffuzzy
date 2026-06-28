@@ -17,6 +17,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (size < 4) return 0;
     ffz_mode mode = (ffz_mode)(data[0] % 5);          // fuzzy..exact
     int parallel = data[2] & 1;                       // exercise the thread path
+    ffz_scoring_mode scoring = (ffz_scoring_mode)((data[2] >> 1) % 3); // off/fast/nucleo
     size_t limit = data[3];                           // 0..255 (incl. 0 = all)
     size_t body = size - 4;
     size_t split = body ? (data[1] % (body + 1)) : 0; // query | haystack
@@ -44,7 +45,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     memset(&r, 0, sizeof(r));
     ffz_corpus_filter(c, q, qn, FFZ_CASE_SMART, FFZ_NORM_SMART, mode,
                       parallel ? ffz_parallel_auto() : ffz_parallel_off(), limit,
-                      &r);
+                      scoring, &r);
 
     // Sanity invariants (ASan-independent): every item_index is in range, and
     // reported indices are strictly increasing (no duplicate/backwards pos).

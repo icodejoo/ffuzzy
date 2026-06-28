@@ -2,6 +2,7 @@
 // No framework: assert helpers track pass/fail and the process exits nonzero
 // on any failure.
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ffz.h"
@@ -1032,6 +1033,61 @@ static void test_prefer_prefix_nucleo(void) {
     ffz_matcher_free(m);
 }
 
+// Regression tests for bugs fixed in the multi-agent review rounds.
+static void test_recent_fixes(void) {
+    // (1) Score saturation (ffz_score.c: ffz_sat_add_u16). A very long exact
+    // match accumulates ~24 per char; without saturation it wraps past uint16
+    // to a tiny value, ranking a perfect match below a poor one. The fix clamps
+    // at 65535.
+    {
+        size_t L = 10000;
+        char *big = (char *)malloc(L + 1);
+        memset(big, 'a', L);
+        big[L] = 0;
+        ffz_matcher *m = ffz_matcher_new(ffz_config_default());
+        int32_t s = score(m, big, big, NULL, FFZ_EXACT);
+        CHECK(s == 65535, "sat: long exact match saturates at 65535 (no wrap)");
+        ffz_matcher_free(m);
+        free(big);
+    }
+
+    // (2) FAST rolling oversized -> greedy fallback. W*nl > FFZ_MAX_MATRIX_SIZE
+    // with out==NULL routes through ffz_fuzzy_rolling, whose cap must bail to
+    // greedy (else an uncapped O(W*nl) DP hangs). Must return promptly + scored.
+    {
+        size_t HW = 600, NW = 200;  // 120000 cells > 102400
+        char *hay = (char *)malloc(HW + 1);
+        char *ndl = (char *)malloc(NW + 1);
+        memset(hay, 'a', HW); hay[HW] = 0;
+        memset(ndl, 'a', NW); ndl[NW] = 0;
+        ffz_config cfg = ffz_config_default();
+        cfg.scoring_mode = FFZ_SCORE_FAST;
+        ffz_matcher *m = ffz_matcher_new(cfg);
+        int32_t s = score(m, ndl, hay, NULL, FFZ_FUZZY);  // NULL -> rolling path
+        CHECK(s > 0, "rolling oversized: FAST score-only falls back to greedy");
+        ffz_matcher_free(m);
+        free(hay); free(ndl);
+    }
+
+    // (3) Atom cap (FFZ_MAX_ATOMS=64). A query with far more space-separated
+    // words than the cap must parse without crash/OOB; atoms past the cap are
+    // dropped. Each "a" atom matches the haystack.
+    {
+        int words = 80;
+        char query[160 + 1];  // 80 'a' + 79 spaces = 159 chars
+        size_t qi = 0;
+        for (int i = 0; i < words; i++) {
+            query[qi++] = 'a';
+            if (i + 1 < words) query[qi++] = ' ';
+        }
+        query[qi] = 0;
+        ffz_matcher *m = ffz_matcher_new(ffz_config_default());
+        int32_t s = score(m, query, "aaaaaaaa", NULL, FFZ_FUZZY);
+        CHECK(s >= 0, "atom cap: >64-word query parses & matches without crash");
+        ffz_matcher_free(m);
+    }
+}
+
 int main(void) {
     ffz_matcher *m = ffz_matcher_new(ffz_config_default());
     test_basic(m);
@@ -1056,6 +1112,7 @@ int main(void) {
     test_scoring_cross();
     test_rolling_golden();
     test_fast_index_consistency();
+    test_recent_fixes();
     test_boundary_conditions();
     test_prefer_prefix();
     test_corpus_scoring();

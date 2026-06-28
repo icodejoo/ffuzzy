@@ -684,9 +684,11 @@ class FuzzyCorpus<T> implements Finalizable {
   /// Append one item.
   void add(T item) {
     _checkMutate();
+    // Native first: if _nativeAdd throws (e.g. OOM), the Dart mirror stays in
+    // sync with the native corpus instead of growing past it.
+    _nativeAdd(item, null);
     _items.add(item);
     _keys.add(null);
-    _nativeAdd(item, null);
     _refreshFinalizer();
   }
 
@@ -694,9 +696,11 @@ class FuzzyCorpus<T> implements Finalizable {
   void addAll(Iterable<T> items) {
     _checkMutate();
     for (final it in items) {
+      // Native first per item: a throw mid-loop leaves both sides consistent
+      // (the items added so far are in both; this one in neither).
+      _nativeAdd(it, null);
       _items.add(it);
       _keys.add(null);
-      _nativeAdd(it, null);
     }
     _refreshFinalizer();
   }
@@ -807,9 +811,14 @@ class FuzzyCorpus<T> implements Finalizable {
   void addKey(T item, List<FuzzyKey> keys) {
     _checkMutate();
     final ks = keys.isEmpty ? null : keys;
+    // Native first: _nativeAdd throws if the native lib predates
+    // ffz_ffi_add_keyed (or on OOM). Pushing the mirror only after it succeeds
+    // keeps _items/_keys 1:1 with the native corpus (else later searches map
+    // native indices to the wrong items).
+    _nativeAdd(item, ks);
     _items.add(item);
     _keys.add(ks);
-    _nativeAdd(item, ks);
+    _refreshFinalizer();
   }
 
   /// Replace the item at [index] (its alternate keys, if any, are dropped).

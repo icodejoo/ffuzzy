@@ -44,7 +44,7 @@ uint16_t ffz_calculate_score(ffz_matcher *m, ffz_str hay, ffz_str needle,
             } else {
                 first_bonus = bonus;
             }
-            score = (uint16_t)(score + FFZ_SCORE_MATCH + bonus);
+            score = ffz_sat_add_u16(score, (uint16_t)(FFZ_SCORE_MATCH + bonus));
             in_gap = false;
             consecutive += 1;
             if (ni + 1 < needle_len) {

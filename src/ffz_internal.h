@@ -22,6 +22,11 @@
 #define FFZ_MAX_MATRIX_SIZE (100 * 1024)  // cells; beyond this -> greedy fallback
 #define FFZ_MAX_NEEDLE_LEN 2048
 
+// Cap atoms-per-query so a pathological space-heavy query (each word = one atom,
+// each atom re-scanned against every corpus item) can't drive O(atoms*items)
+// into a CPU hang. Extra words past the cap are dropped.
+#define FFZ_MAX_ATOMS 64
+
 // --- DP cells (explicit two-track scoring; see ffz_fuzzy.c) ---------------
 // M-track: needle[k] matched AT this haystack column.
 typedef struct {
@@ -258,8 +263,10 @@ int32_t ffz_fuzzy_optimal(ffz_matcher *m, ffz_str hay, ffz_str needle,
 int32_t ffz_fuzzy_greedy(ffz_matcher *m, ffz_str hay, ffz_str needle,
                          size_t start, size_t end, ffz_indices *out);
 // 2-row rolling Smith-Waterman DP (FAST mode, score-only, no backtracking).
+// greedy_end is the linear-fallback window end (used when oversized); end is the
+// DP window end.
 int32_t ffz_fuzzy_rolling(ffz_matcher *m, ffz_str hay, ffz_str needle,
-                          size_t start, size_t end);
+                          size_t start, size_t greedy_end, size_t end);
 
 // --- prefilter (ffz_prefilter.c) -----------------------------------------
 // Find (start, greedy_end, end) bounds for a subsequence match. Returns false

@@ -163,6 +163,7 @@ typedef struct {
 static void emit_atom(void *ud, const char *word, size_t wlen) {
     build_ctx *ctx = (build_ctx *)ud;
     ffz_pattern *p = ctx->p;
+    if (p->n >= FFZ_MAX_ATOMS) return;  // DoS guard: drop atoms past the cap
     if (p->n == ctx->cap) {
         size_t ncap = ctx->cap ? ctx->cap * 2 : 4;
         ffz_atom *na = (ffz_atom *)realloc(p->atoms, ncap * sizeof(ffz_atom));

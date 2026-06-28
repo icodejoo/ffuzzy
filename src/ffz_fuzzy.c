@@ -253,10 +253,19 @@ int32_t ffz_fuzzy_optimal(ffz_matcher *m, ffz_str hay, ffz_str needle,
 //                 C[k][i-1]   - GAP_EXTENSION)
 // C[k][i] is computed during the scan and feeds column i+1 via pprev_c.
 int32_t ffz_fuzzy_rolling(ffz_matcher *m, ffz_str hay, ffz_str needle,
-                          size_t start, size_t end) {
+                          size_t start, size_t greedy_end, size_t end) {
     const ffz_config *cfg = &m->cfg;
     size_t W = end - start;
     size_t nl = needle.len;
+
+    // Oversized -> linear greedy (score-only), mirroring ffz_fuzzy_optimal's cap
+    // (ffz_fuzzy.c:50). Without it the default FAST path runs an uncapped O(W*nl)
+    // DP, so a large corpus item + long matching query hangs the isolate. Use
+    // greedy_end (not end) so the fallback window matches optimal's and the
+    // index-producing FAST path (ffz_match.c).
+    if ((size_t)W * nl > FFZ_MAX_MATRIX_SIZE || W > 0xFFFF ||
+        nl > FFZ_MAX_NEEDLE_LEN)
+        return ffz_fuzzy_greedy(m, hay, needle, start, greedy_end, NULL);
 
     if (!ffz_matcher_reserve(m, W, 1)) return -1;  // OOM
 
