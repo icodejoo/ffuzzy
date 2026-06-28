@@ -34,6 +34,9 @@ migrate_working_dir/
 
 # C 引擎构建产物(仓库根即 C 插件)
 build/
+
+# WASM 编译产物 (wasm/ 下的 .js 由 scripts/build-wasm.sh 生成)
+/wasm/*.js
 *.o
 *.a
 *.exe
@@ -52,6 +55,7 @@ perf/data_cjk.txt
 perf/q_*.txt
 perf/results.csv
 
-# 旧 Rust 基准(仅本地对比用)的便携 bundle 与签名私钥,绝不入库
-benchmark/ffuzzy.bundle
-precompiled_signing_key.PRIVATE.txt
+# 编译产物(DLL/so/dylib)不入库
+*.dll
+*.so
+*.dylib
