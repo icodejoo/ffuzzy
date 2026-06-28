@@ -81,9 +81,8 @@ export declare const FuzzyScoring: {
   readonly off:    1;
   readonly nucleo: 2;
 };
-/** `0` fast (rolling DP) · `1` off (no ranking) · `2` nucleo (full-matrix DP).
- *  `off`/`nucleo` require the scoring-ABI engine; the legacy lite engine falls
- *  back to `fast`. */
+/** `0` fast (rolling DP) · `1` off (no ranking, insertion order) · `2` nucleo
+ *  (full-matrix DP, highest fidelity). */
 export type FuzzyScoring = 0 | 1 | 2;
 
 // ---------------------------------------------------------------------------

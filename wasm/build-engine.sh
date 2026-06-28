@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# Recompile the ffz C engine to a single-file WASM ES module:
-#   wasm/ffuzzy.engine.mjs   (SINGLE_FILE — wasm base64-inlined, default export = ffuzzyModule)
+# Recompile the ffz C engine to single-file WASM ES modules:
+#   wasm/ffuzzy.engine.mjs        FULL — all Unicode tables (default ffuzzyModule)
+#   wasm/ffuzzy-lite.engine.mjs   LITE — ASCII + CJK only (default ffuzzyModuleLite)
+#
+# Both target the browser (-sENVIRONMENT=web,worker) so they bundle cleanly for
+# the web (no node: imports) yet still run in Node (SINGLE_FILE inlines the wasm).
+#
+# LITE = the same sources but with the full Unicode tables (src/ffz_unicode_tables.c)
+# swapped for the empty passthrough stub (lite-tables.c): non-ASCII casefold /
+# normalize become no-ops, dropping ~17 KB. ASCII fold + CJK matching still work.
 #
 # This is the slow path (needs Emscripten). The committed *.engine.mjs are the
 # build inputs; `npm run build` (build.mjs) appends the wrapper to them to make
@@ -9,11 +17,6 @@
 #   npm run build:engine     # then: npm run build
 #
 # Requires Emscripten (source /d/sdk/emsdk/emsdk_env.sh, or set EMSDK).
-#
-# LITE: the ASCII+CJK lite engine (ffuzzy-lite.engine.mjs) uses slimmed Unicode
-# tables and is NOT yet reproducible here — its recipe (gen_unicode_tables.py
-# options + table swap) must be documented first. Until then the committed
-# ffuzzy-lite.engine.mjs is the frozen legacy build. TODO.
 set -euo pipefail
 
 WASM="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # wasm/
@@ -34,17 +37,25 @@ EXPORTS="_malloc,_free"
 for s in "${SYMS[@]}"; do EXPORTS+=",_$s"; done
 RUNTIME="ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,getValue,setValue,HEAPU8,HEAPU32,HEAP32"
 
-echo "--- building FULL engine -> $WASM/ffuzzy.engine.mjs ($OPT, SINGLE_FILE) ---"
-emcc $OPT -std=c11 -DFFZ_NO_THREADS -I"$ROOT/include" \
-  "$ROOT"/src/*.c "$ROOT/ffi/ffz_ffi.c" \
-  -o "$WASM/ffuzzy.engine.mjs" \
-  -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=ffuzzyModule \
-  -sSINGLE_FILE=1 \
-  -sENVIRONMENT=web,worker \
-  -sALLOW_MEMORY_GROWTH=1 -sFILESYSTEM=0 \
-  -sEXPORTED_FUNCTIONS="$EXPORTS" \
-  -sEXPORTED_RUNTIME_METHODS="$RUNTIME"
+COMMON=(-std=c11 -DFFZ_NO_THREADS -I"$ROOT/include"
+  -sMODULARIZE=1 -sEXPORT_ES6=1 -sSINGLE_FILE=1
+  -sENVIRONMENT=web,worker -sALLOW_MEMORY_GROWTH=1 -sFILESYSTEM=0
+  -sEXPORTED_FUNCTIONS="$EXPORTS" -sEXPORTED_RUNTIME_METHODS="$RUNTIME")
 
-ls -la "$WASM/ffuzzy.engine.mjs"
-echo "done. Now run: npm run build   (appends the wrapper -> ffuzzy.js / ffuzzy-lite.js)"
-echo "NOTE: ffuzzy-lite.engine.mjs is the frozen legacy lite build (recipe TODO)."
+echo "--- FULL -> $WASM/ffuzzy.engine.mjs ($OPT) ---"
+emcc $OPT "${COMMON[@]}" -sEXPORT_NAME=ffuzzyModule \
+  "$ROOT"/src/*.c "$ROOT/ffi/ffz_ffi.c" \
+  -o "$WASM/ffuzzy.engine.mjs"
+
+echo "--- LITE -> $WASM/ffuzzy-lite.engine.mjs ($OPT, empty Unicode tables) ---"
+# all engine sources EXCEPT the full Unicode tables, plus the passthrough stub
+LITE_SRC=()
+for f in "$ROOT"/src/*.c; do
+  [ "$(basename "$f")" = "ffz_unicode_tables.c" ] || LITE_SRC+=("$f")
+done
+emcc $OPT "${COMMON[@]}" -sEXPORT_NAME=ffuzzyModuleLite \
+  "${LITE_SRC[@]}" "$WASM/lite-tables.c" "$ROOT/ffi/ffz_ffi.c" \
+  -o "$WASM/ffuzzy-lite.engine.mjs"
+
+ls -la "$WASM"/ffuzzy.engine.mjs "$WASM"/ffuzzy-lite.engine.mjs
+echo "done. Now run: npm run build   (appends the wrapper -> *.js)"

@@ -63,7 +63,7 @@ export declare const FuzzyMode: {
 export type FuzzyMode = 0 | 1 | 2 | 3 | 4;
 
 export declare const FuzzyScoring: { readonly fast: 0; readonly off: 1; readonly nucleo: 2 };
-/** `0` fast · `1` off · `2` nucleo (legacy lite engine falls back to `fast`). */
+/** `0` fast · `1` off (insertion order) · `2` nucleo (full-matrix DP). */
 export type FuzzyScoring = 0 | 1 | 2;
 
 export declare const FuzzyKeyKind: {
