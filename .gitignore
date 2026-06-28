@@ -35,8 +35,8 @@ migrate_working_dir/
 # C 引擎构建产物(仓库根即 C 插件)
 build/
 
-# WASM 编译产物 (wasm/ 下的 .js 由 scripts/build-wasm.sh 生成)
-/wasm/*.js
+# WASM bundles (wasm/*.js) are now tracked — regenerate with `npm run build`
+# (wasm/build.mjs appends the wrapper to the committed engine .mjs).
 *.o
 *.a
 *.obj
@@ -84,3 +84,6 @@ example/android/local.properties
 
 # 备份文件
 *.bak
+
+# npm pack output
+*.tgz

@@ -24,8 +24,10 @@
     "access": "public"
   },
   "scripts": {
-    "build": "bash ../scripts/build-wasm.sh",
-    "prepublishOnly": "node --input-type=module -e \"import{existsSync}from'node:fs';if(!existsSync('ffuzzy.js')){console.error('Run npm run build first');process.exit(1)}\""
+    "build": "node build.mjs",
+    "build:engine": "bash build-engine.sh",
+    "test": "node build.mjs && node --test",
+    "prepublishOnly": "node build.mjs"
   },
   "keywords": [
     "fuzzy-search",
