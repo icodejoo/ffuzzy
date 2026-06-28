@@ -53,7 +53,9 @@ LITE_SRC=()
 for f in "$ROOT"/src/*.c; do
   [ "$(basename "$f")" = "ffz_unicode_tables.c" ] || LITE_SRC+=("$f")
 done
-emcc $OPT "${COMMON[@]}" -sEXPORT_NAME=ffuzzyModuleLite \
+# -DFFZ_COMPACT_CLASS drops the ~12 KB class table too (ffz_chars.c falls back to
+# an approximation; affects only non-ASCII scoring precision, never match/no-match).
+emcc $OPT "${COMMON[@]}" -DFFZ_COMPACT_CLASS -sEXPORT_NAME=ffuzzyModuleLite \
   "${LITE_SRC[@]}" "$WASM/lite-tables.c" "$ROOT/ffi/ffz_ffi.c" \
   -o "$WASM/ffuzzy-lite.engine.mjs"
 
