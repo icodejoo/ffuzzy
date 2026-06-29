@@ -61,7 +61,7 @@ export class FuzzyOptions {
     parallel = false,
     threads = 0,
     limit = 0,
-    highlight = true,
+    highlight = false,
   } = {}) {
     this.scoring = scoring;
     this.caseMatching = caseMatching;
@@ -210,6 +210,17 @@ export class FuzzyCorpus {
   postfix  (query, opts = {}) { return this.#search(3, query, opts); }
   exact    (query, opts = {}) { return this.#search(4, query, opts); }
 
+  /** Fuzzy search — returns raw items without FuzzyHit wrapper. Faster: skips highlight-index computation. */
+  fuzzyRaws    (query, opts = {}) { return this.#searchRaws(0, query, opts); }
+  /** Substring search — raw items. */
+  substringRaws(query, opts = {}) { return this.#searchRaws(1, query, opts); }
+  /** Prefix search — raw items. */
+  prefixRaws   (query, opts = {}) { return this.#searchRaws(2, query, opts); }
+  /** Postfix search — raw items. */
+  postfixRaws  (query, opts = {}) { return this.#searchRaws(3, query, opts); }
+  /** Exact search — raw items. */
+  exactRaws    (query, opts = {}) { return this.#searchRaws(4, query, opts); }
+
   dispose() {
     if (this.#disposed) return;
     this.#disposed = true;
@@ -253,27 +264,45 @@ export class FuzzyCorpus {
     for (let i = 0; i < this.#items.length; i++) this.#nativeAdd(this.#items[i], this.#keys[i]);
   }
 
+  #filter(mode, query, o) {
+    const M = this.#M;
+    const [qp, qn] = _utf8(M, query);
+    let res;
+    if (o.highlight) {
+      // highlight=true: need Pass 2 — use filterEx2 so C computes indices.
+      res = M._ffz_ffi_filter_ex2
+        ? M._ffz_ffi_filter_ex2(this.#ptr, qp, qn, mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads ?? 0, o.limit ?? 0, o.scoring ?? 0)
+        : M._ffz_ffi_filter_ex(this.#ptr, qp, qn, mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads ?? 0, o.limit ?? 0);
+    } else {
+      // highlight=false (default): skip Pass 2 via filter_raws — faster.
+      res = M._ffz_ffi_filter_raws
+        ? M._ffz_ffi_filter_raws(this.#ptr, qp, qn, mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads ?? 0, o.limit ?? 0, o.scoring ?? 0)
+        : M._ffz_ffi_filter_ex2
+          ? M._ffz_ffi_filter_ex2(this.#ptr, qp, qn, mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads ?? 0, o.limit ?? 0, o.scoring ?? 0)
+          : M._ffz_ffi_filter_ex(this.#ptr, qp, qn, mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads ?? 0, o.limit ?? 0);
+    }
+    M._free(qp);
+    if (!res) throw new Error('FuzzyCorpus: filter failed (out of memory or invalid parameters)');
+    return res;
+  }
+
   #search(mode, query, overrides) {
     this.#alive();
     const M = this.#M;
     const o = { ...this.#opts, ...overrides };
-    const [qp, qn] = _utf8(M, query);
-    const res = M._ffz_ffi_filter_ex2
-      ? M._ffz_ffi_filter_ex2(this.#ptr, qp, qn, mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads ?? 0, o.limit ?? 0, o.scoring ?? 0)
-      : M._ffz_ffi_filter_ex(this.#ptr, qp, qn, mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads ?? 0, o.limit ?? 0);
-    M._free(qp);
-    if (!res) throw new Error('FuzzyCorpus: filter failed (out of memory or invalid parameters)');
+    const res = this.#filter(mode, query, o);
     const hits = [];
     const len = M._ffz_ffi_results_len(res);
+    const canReadIdx = o.highlight && typeof M._ffz_ffi_results_nindices === 'function';
     for (let i = 0; i < len; i++) {
       const index = M._ffz_ffi_results_item(res, i);
       let indices = [];
-      if (o.highlight !== false) {
+      if (canReadIdx) {
         const ni = M._ffz_ffi_results_nindices(res, i);
         indices = Array.from({ length: ni }, (_, j) => M._ffz_ffi_results_index(res, i, j));
       }
       hits.push({
-        obj: this.#items[index],
+        raw: this.#items[index],
         index,
         score: M._ffz_ffi_results_score(res, i),
         matchedKind: M._ffz_ffi_results_kind(res, i),
@@ -283,6 +312,28 @@ export class FuzzyCorpus {
     }
     M._ffz_ffi_results_free(res);
     return hits;
+  }
+
+  // Returns raw items only (no FuzzyHit wrapper). Uses ffz_ffi_filter_raws
+  // when available (skips C-side index computation); falls back to regular filter.
+  #searchRaws(mode, query, overrides) {
+    this.#alive();
+    const M = this.#M;
+    const o = { ...this.#opts, ...overrides };
+    let res;
+    if (typeof M._ffz_ffi_filter_raws === 'function') {
+      const [qp, qn] = _utf8(M, query);
+      res = M._ffz_ffi_filter_raws(this.#ptr, qp, qn, mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads ?? 0, o.limit ?? 0, o.scoring ?? 0);
+      M._free(qp);
+      if (!res) throw new Error('FuzzyCorpus: filter_raws failed (out of memory or invalid parameters)');
+    } else {
+      res = this.#filter(mode, query, o);
+    }
+    const items = [];
+    const len = M._ffz_ffi_results_len(res);
+    for (let i = 0; i < len; i++) items.push(this.#items[M._ffz_ffi_results_item(res, i)]);
+    M._ffz_ffi_results_free(res);
+    return items;
   }
 
   #alive() {
@@ -297,8 +348,9 @@ export class FuzzyCorpus {
 }
 
 /**
- * Convert codepoint indices (as in FuzzyHit.indices) to UTF-16 code-unit
+ * Convert codepoint indices (as in `FuzzyHit.indices`) to UTF-16 code-unit
  * offsets into `text`, suitable for DOM range / highlight APIs.
+ * For BMP-only text (ASCII, CJK) this is a no-op; matters for emoji.
  */
 export function fuzzyCodepointToUtf16(text, codepointIndices) {
   if (!codepointIndices.length) return [];
@@ -310,3 +362,43 @@ export function fuzzyCodepointToUtf16(text, codepointIndices) {
   }
   return codepointIndices.map((c) => (c >= 0 && c < offsets.length ? offsets[c] : u16));
 }
+
+// ── _esc: HTML-escape a single codepoint string (prevents XSS) ─────────────
+function _esc(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Wrap matched characters in an HTML tag for search-result highlighting.
+ *
+ * Adjacent matched codepoints are merged into one tag, so the output is
+ * `<mark>src</mark>/main.dart` rather than `<mark>s</mark><mark>r</mark>…`.
+ * Non-matched text is HTML-escaped to prevent XSS.
+ *
+ * @param {string} text   - Item text (e.g. `hit.raw`).
+ * @param {number[]} indices - Codepoint indices from `FuzzyHit.indices`
+ *                            (requires `highlight: true` on the search call).
+ * @param {object}  [opts]
+ * @param {string}  [opts.tag='mark'] - HTML tag wrapping matched chars.
+ * @returns {string} HTML string ready for `innerHTML`.
+ *
+ * @example
+ * const hits = corpus.fuzzy('src', { highlight: true });
+ * el.innerHTML = highlightHtml(hits[0].raw, hits[0].indices);
+ * // → '<mark>src</mark>/main.dart'
+ */
+export function highlightHtml(text, indices, { tag = 'mark' } = {}) {
+  if (!indices || indices.length === 0) return _esc(text);
+  const set = new Set(indices);
+  const codepoints = [...text]; // spread by Unicode codepoint, not UTF-16 unit
+  let out = '', open = false;
+  for (let i = 0; i < codepoints.length; i++) {
+    const matched = set.has(i);
+    if (matched && !open)  { out += `<${tag}>`; open = true; }
+    if (!matched && open)  { out += `</${tag}>`; open = false; }
+    out += _esc(codepoints[i]);
+  }
+  if (open) out += `</${tag}>`;
+  return out;
+}
+

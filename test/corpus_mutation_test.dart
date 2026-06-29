@@ -117,8 +117,8 @@ void main() {
       corpus.update(0, 'charlie');
       final hits = corpus.exact('charlie');
       expect(hits, isNotEmpty);
-      expect(hits.first.obj, equals('charlie'),
-          reason: 'hit.obj 应反映更新后的值');
+      expect(hits.first.raw, equals('charlie'),
+          reason: 'hit.raw 应反映更新后的值');
       expect(hits.first.index, equals(0),
           reason: 'update 后 index 不变，仍为 0');
     });

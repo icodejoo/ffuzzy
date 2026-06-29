@@ -17,7 +17,7 @@ on its own. The native library is **~32 KB** stripped.
   bundle per-platform; consumers need no extra toolchain. *(Web is not supported
   — `dart:ffi` is unavailable on web.)*
 - **Search any object** — `FuzzyCorpus<T>` searches a `List<T>`; hits carry the
-  original object (`hit.obj`).
+  original object (`hit.raw`).
 - **Match modes as methods** — `fuzzy` (fzf-style, with `! ^ ' $` operators),
   `substring`, `prefix`, `postfix`, `exact`; each with an `…Async` twin.
 - **Multi-threaded** and **async** scans for large corpora without UI jank.
@@ -48,13 +48,13 @@ import 'package:ffuzzy/ffuzzy.dart';
 // Plain strings:
 final corpus = FuzzyCorpus.strings(['src/main.dart', 'lib/widget.dart', '中文搜索']);
 for (final h in corpus.fuzzy('srcmn', parallel: true, limit: 50)) {
-  print('${h.obj}  score=${h.score}');   // h.obj is the matched String
+  print('${h.raw}  score=${h.score}');   // h.raw is the matched String
 }
 corpus.dispose();                          // or let the NativeFinalizer reclaim it
 
 // Any object — give a `stringOf` extractor; hits carry the object:
 final files = FuzzyCorpus<File>(myFiles, stringOf: (f) => f.path);
-final hit = files.prefix('lib/').firstOrNull;   // hit.obj is a File
+final hit = files.prefix('lib/').firstOrNull;   // hit.raw is a File
 ```
 
 > A `FuzzyCorpus` owns native memory and must be used only on the isolate that
@@ -93,7 +93,7 @@ FuzzyCorpus<T>(
 // Convenience for plain strings (the item is its own search text):
 static FuzzyCorpus<String> FuzzyCorpus.strings(Iterable<String> items, {…})
 
-// Convenience for a List<Map> searched by one field; hit.obj is the whole map:
+// Convenience for a List<Map> searched by one field; hit.raw is the whole map:
 static FuzzyCorpus<Map<String, dynamic>> FuzzyCorpus.byKey(
     Iterable<Map<String, dynamic>> items, String field, {…})
 
@@ -152,9 +152,15 @@ List<FuzzyHit<T>> exact(String query, {…overrides});      Future<…> exactAsy
   (`!` negate, `^` prefix, `'` substring, `$` suffix) — so `'lib parse'` is an
   AND of two terms. The other modes treat the whole query as one literal atom.
 - **Overrides** (`{FuzzyCase? caseMatching, FuzzyNorm? normalization, bool? parallel,
-  int? threads, int? limit, bool? highlight}`): each non-null argument overrides
-  the corresponding field of the corpus's [`FuzzyOptions`](#fuzzyoptions) for that
-  call only. e.g. `corpus.fuzzy(q, limit: 50)`.
+  int? threads, int? limit, bool? highlight, FuzzyScoring? scoring}`): each non-null
+  argument overrides the corresponding field of the corpus's
+  [`FuzzyOptions`](#fuzzyoptions) for that call only.
+  e.g. `corpus.fuzzy(q, limit: 50)` or `corpus.fuzzy(q, highlight: true)`.
+- **Raw-object shortcuts** — when you only need the matched items (no score /
+  indices metadata), `*Raws` variants skip `FuzzyHit` wrapping and are faster:
+  `fuzzyRaws`, `substringRaws`, `prefixRaws`, `postfixRaws`, `suffixRaws`,
+  `exactRaws` (each with an `…Async` twin). `corpus.one` also exposes `fuzzyRaw`,
+  `prefixRaw`, … returning `T?`.
 - **Best single hit:** `corpus.one` is a view exposing the same five modes, each
   returning `FuzzyHit<T>?` (the top hit, or null) instead of a list —
   `corpus.one.fuzzy(q)`, `corpus.one.prefix(q)`, … (+ `…Async`). It runs the
@@ -201,7 +207,7 @@ every field has a default, so `const FuzzyOptions()` is the common base.
 | `parallel` | `bool` | `false` | multi-threaded scoring |
 | `threads` | `int` | `0` | `0` = auto (half the CPUs, capped at 8; hard ceiling cpu-1; <512 items always serial) |
 | `limit` | `int` | `0` | max hits (`0` = all) |
-| `highlight` | `bool` | `true` | `false` skips reading match indices (faster) |
+| `highlight` | `bool` | `false` | `true` runs Pass 2 to populate `FuzzyHit.indices` for highlighting; `false` (default) skips it for speed. |
 | `scoring` | `FuzzyScoring` | `FuzzyScoring.fast` | Scoring algorithm: `fast` (rolling DP, default), `off` (no ranking, insertion order), `nucleo` (full-matrix DP, highest accuracy ~2× CPU). |
 
 `FuzzyOptions` also has `copyWith(...)`. Example:
@@ -219,13 +225,13 @@ One search result.
 
 | Field | Type | Description |
 |---|---|---|
-| `obj` | `T` | The original item that matched. |
+| `raw` | `T` | The original item that matched. |
 | `index` | `int` | The item's insertion order in the corpus. |
 | `score` | `int` | Match score (higher is better). |
 | `matchedKind` | `FuzzyKeyKind` | Which kind of key matched (original / pinyin / …). |
 | `matchedKindCode` | `int` | Raw kind code (e.g. `100`, `101`). Same as `matchedKind.code` for built-in kinds; for host-defined keys added via `addKey`/`byKeys` this preserves the original numeric value, letting you distinguish multiple custom key types where `matchedKind` would report `custom` for all. |
 | `matchedKey` | `int` | Which key of the item matched (`0` == original). |
-| `indices` | `List<int>` | Matched **codepoint** positions in the matched key — convert with [`fuzzyCodepointToUtf16`](#highlighting) before indexing a Dart `String`. |
+| `indices` | `List<int>` | Matched **codepoint** positions in the matched key. **Populated only when `highlight: true`**; empty otherwise. Convert with [`fuzzyCodepointToUtf16`](#highlighting) before indexing a Dart `String`. |
 
 ## Enums
 
@@ -276,12 +282,14 @@ See [Multi-key / CJK transliteration](#multi-key--cjk-transliteration) for usage
 List<int> fuzzyCodepointToUtf16(String text, List<int> codepointIndices)
 ```
 
-`FuzzyHit.indices` are codepoint positions; Dart strings are UTF-16. Convert
-before building a `TextSpan` so emoji / astral characters don't misalign:
+Pass `highlight: true` on the search call to populate `FuzzyHit.indices`
+(defaults to `false` for speed). `indices` are codepoint positions; Dart
+strings are UTF-16 — convert before building a `TextSpan` so emoji / astral
+characters don't misalign:
 
 ```dart
-final hit = corpus.fuzzy('src').first;
-final text = hit.obj as String;                       // or stringOf(hit.obj)
+final hit = corpus.fuzzy('src', highlight: true).first;
+final text = hit.raw as String;
 final marks = fuzzyCodepointToUtf16(text, hit.indices).toSet();
 final spans = [
   for (var i = 0; i < text.length; i++)
@@ -396,7 +404,7 @@ exclusive **writer**, and the binding enforces this so you can't trigger a race:
 
 **Memory / CPU** — the resident corpus holds one native copy of every item's
 text (this is the index); the Dart side also keeps your `List<T>` to resolve
-`hit.obj`, so plan for roughly the text stored twice plus your objects. Searches
+`hit.raw`, so plan for roughly the text stored twice plus your objects. Searches
 allocate only a transient results buffer (freed immediately) — repeated
 searching does **not** grow memory. Note that `…Async` spawns a short-lived
 isolate per call, so firing one per keystroke is wasteful churn — see below.

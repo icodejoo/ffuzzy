@@ -1,6 +1,5 @@
 // Minimal demo of the ffz fuzzy matcher: type in the box to filter a list,
-// with matched characters highlighted. Shows the codepoint->UTF-16 conversion
-// needed for correct highlighting of Unicode (incl. CJK) text.
+// with matched characters highlighted (highlight: true → FuzzyHit.indices).
 import 'package:flutter/material.dart';
 import 'package:ffuzzy/ffuzzy.dart';
 
@@ -57,7 +56,7 @@ class _SearchPageState extends State<SearchPage> {
     // query (never a stale one). (For a small corpus, a synchronous `_corpus
     // .fuzzy(q)` is simpler and inherently latest-wins.)
     final gen = ++_searchGen;
-    final hits = await _corpus.fuzzyAsync(q, limit: 50);
+    final hits = await _corpus.fuzzyAsync(q, limit: 50, highlight: true);
     // Ignore if a newer keystroke superseded this, or the widget is gone.
     if (!mounted || gen != _searchGen) return;
     setState(() => _hits = hits);
@@ -91,14 +90,13 @@ class _SearchPageState extends State<SearchPage> {
               itemCount: _hits.length,
               itemBuilder: (context, i) {
                 final hit = _hits[i];
-                // matchedKey 0 == the original item; only highlight then.
-                final text = hit.obj;
-                final highlight = hit.matchedKey == 0
+                final text = hit.raw;
+                final positions = hit.matchedKey == 0
                     ? fuzzyCodepointToUtf16(text, hit.indices).toSet()
                     : const <int>{};
                 return ListTile(
                   dense: true,
-                  title: _Highlighted(text, highlight),
+                  title: _Highlighted(text, positions),
                   trailing: Text('${hit.score}'),
                   subtitle: hit.matchedKind == FuzzyKeyKind.original
                       ? null

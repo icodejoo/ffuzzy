@@ -24,9 +24,13 @@ ROOT="$(cd "$WASM/.." && pwd)"                          # repo root
 OPT="${OPT:--Oz}"                                        # size-optimized for the web
 
 if ! command -v emcc >/dev/null 2>&1; then
-  for env in "${EMSDK:-}/emsdk_env.sh" /d/sdk/emsdk/emsdk_env.sh ~/emsdk/emsdk_env.sh; do
+  for env in "${EMSDK:-}/emsdk_env.sh" /c/sdk/emsdk/emsdk_env.sh /d/sdk/emsdk/emsdk_env.sh ~/emsdk/emsdk_env.sh; do
     [ -f "$env" ] && { source "$env" >/dev/null 2>&1 || true; break; }
   done
+  # Fallback: set PATH directly if emsdk_env.sh sourcing fails (e.g. missing system Python)
+  if ! command -v emcc >/dev/null 2>&1 && [ -d /c/sdk/emsdk/upstream/emscripten ]; then
+    export PATH="/c/sdk/emsdk/python/3.13.3_64bit:/c/sdk/emsdk/upstream/emscripten:/c/sdk/emsdk/upstream/bin:/c/sdk/emsdk/node/22.16.0_64bit:$PATH"
+  fi
 fi
 command -v emcc >/dev/null 2>&1 || { echo "error: emcc not found; source emsdk_env.sh" >&2; exit 1; }
 echo "Using $(emcc --version | head -1)"

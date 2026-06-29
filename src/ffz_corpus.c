@@ -445,11 +445,13 @@ ffz_scoring_mode ffz_corpus_scoring(const ffz_corpus *c) {
     return c->cfg.scoring_mode;
 }
 
-void ffz_corpus_filter(ffz_corpus *c, const char *query, size_t query_len,
-                       ffz_case_matching cm, ffz_normalization nm,
-                       ffz_mode mode, ffz_parallel par, size_t limit,
-                       ffz_scoring_mode scoring,
-                       ffz_results *out) {
+// Internal: shared implementation for ffz_corpus_filter and ffz_corpus_filter_raws.
+// skip_idx=true omits Pass 2 (index computation) — results have empty indices.
+static void _corpus_filter_impl(ffz_corpus *c, const char *query, size_t query_len,
+                                ffz_case_matching cm, ffz_normalization nm,
+                                ffz_mode mode, ffz_parallel par, size_t limit,
+                                ffz_scoring_mode scoring, bool skip_idx,
+                                ffz_results *out) {
     ffz_results_free(out);
     if ((unsigned)scoring > FFZ_SCORE_NUCLEO) scoring = FFZ_SCORE_FAST;
     out->hits = NULL;
@@ -548,7 +550,8 @@ void ffz_corpus_filter(ffz_corpus *c, const char *query, size_t query_len,
         }
     }
 
-    // Pass 2: recompute indices only for the survivors, on their winning key.
+    // Pass 2: recompute indices for survivors on their winning key.
+    // Skipped when skip_idx=true (caller only needs item identity, not positions).
     for (size_t r = 0; r < keep; r++) {
         ffz_hit hit;
         hit.item_index = sc[r].item_index;
@@ -557,14 +560,36 @@ void ffz_corpus_filter(ffz_corpus *c, const char *query, size_t query_len,
         hit.matched_key = sc[r].matched_key;
         hit.indices.data = NULL;
         hit.indices.len = hit.indices.cap = 0;
-        corpus_item *it = &c->items[sc[r].item_index];
-        const corpus_key *key = item_key(it, sc[r].matched_key);
-        ffz_pattern_match(fm, pat, key_str(key), &hit.indices);
-        ffz_indices_sort_dedup(&hit.indices);
+        if (!skip_idx) {
+            corpus_item *it = &c->items[sc[r].item_index];
+            const corpus_key *key = item_key(it, sc[r].matched_key);
+            ffz_pattern_match(fm, pat, key_str(key), &hit.indices);
+            ffz_indices_sort_dedup(&hit.indices);
+        }
         results_push(out, hit);
     }
 
     free(sc);
     ffz_matcher_free(fm);
     ffz_pattern_free(pat);
+}
+
+void ffz_corpus_filter(ffz_corpus *c, const char *query, size_t query_len,
+                       ffz_case_matching cm, ffz_normalization nm,
+                       ffz_mode mode, ffz_parallel par, size_t limit,
+                       ffz_scoring_mode scoring,
+                       ffz_results *out) {
+    _corpus_filter_impl(c, query, query_len, cm, nm, mode, par, limit,
+                        scoring, false, out);
+}
+
+// Like ffz_corpus_filter but skips Pass 2 (no index computation).
+// All hit.indices will be empty. Use when only item identity/order is needed.
+void ffz_corpus_filter_raws(ffz_corpus *c, const char *query, size_t query_len,
+                             ffz_case_matching cm, ffz_normalization nm,
+                             ffz_mode mode, ffz_parallel par, size_t limit,
+                             ffz_scoring_mode scoring,
+                             ffz_results *out) {
+    _corpus_filter_impl(c, query, query_len, cm, nm, mode, par, limit,
+                        scoring, true, out);
 }

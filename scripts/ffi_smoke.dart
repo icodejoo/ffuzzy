@@ -13,7 +13,7 @@ Future<void> main(List<String> args) async {
 
   final fuzzy = c.fuzzy('src', limit: 10);
   if (fuzzy.isEmpty) throw 'expected fuzzy hits for "src"';
-  if (fuzzy.first.obj.isEmpty) throw 'hit.obj should be the original item text';
+  if (fuzzy.first.raw.isEmpty) throw 'hit.raw should be the original item text';
 
   final cjk = c.fuzzy('中文');
   if (cjk.isEmpty) throw 'expected a CJK hit for "中文"';
@@ -24,9 +24,12 @@ Future<void> main(List<String> args) async {
   final pref = c.prefix('READ', caseMatching: FuzzyCase.ignore);
   if (pref.isEmpty) throw 'expected prefix hit for "READ"';
 
-  // Highlight conversion must yield in-range UTF-16 offsets.
-  final h = fuzzy.first;
-  fuzzyCodepointToUtf16('src/main.rs', h.indices);
+  // highlight:false (default) — indices empty; highlight:true — indices populated.
+  final noHL = c.fuzzy('src', limit: 1);
+  if (noHL.first.indices.isNotEmpty) throw 'highlight:false should yield empty indices';
+  final hlHits = c.fuzzy('src', limit: 1, highlight: true);
+  if (hlHits.first.indices.isEmpty) throw 'highlight:true should yield indices';
+  fuzzyCodepointToUtf16('src/main.rs', hlHits.first.indices);
 
   // The async twin must agree with the synchronous method, element-by-element.
   final async = await c.fuzzyAsync('src', limit: 10);
@@ -60,22 +63,22 @@ Future<void> main(List<String> args) async {
   // single-best view: corpus.one.<mode> returns the top hit (or null), running
   // the same native scan as the list method with limit 1.
   final best = c.one.fuzzy('src');
-  if (best == null || best.obj.isEmpty) {
+  if (best == null || best.raw.isEmpty) {
     throw 'one.fuzzy should find the best hit';
   }
   if (c.one.exact('definitely-absent') != null) {
     throw 'one.exact should be null for no match';
   }
 
-  // keyed: a List<Map> searched by a field; hit.obj is the whole map.
+  // keyed: a List<Map> searched by a field; hit.raw is the whole map.
   final maps = FuzzyCorpus.byKey([
     {'name': 'Alice', 'id': 1},
     {'name': 'Bob', 'id': 2},
   ], 'name', libraryPath: libPath);
   final ml = maps.prefix('Al');
-  if (ml.isEmpty || ml.first.obj['id'] != 1) throw 'keyed map search failed';
+  if (ml.isEmpty || ml.first.raw['id'] != 1) throw 'keyed map search failed';
   final mo = maps.one.prefix('Al');
-  if (mo == null || mo.obj['id'] != 1) throw 'keyed one.prefix failed';
+  if (mo == null || mo.raw['id'] != 1) throw 'keyed one.prefix failed';
   maps.dispose();
 
   // buildAsync: populate on a background isolate, search, then disposeAndWait.

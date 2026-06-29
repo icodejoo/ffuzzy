@@ -6,7 +6,7 @@ import { test } from 'node:test';
 
 import {
   ffuzzyInitialize, ffuzzyReady, FuzzyCorpus, FuzzyKey, FuzzyKeyKind,
-  FuzzyScoring, fuzzyCodepointToUtf16,
+  FuzzyScoring, fuzzyCodepointToUtf16, highlightHtml,
 } from '../ffuzzy.js';
 
 test('full: init idempotent + ffuzzyReady', async () => {
@@ -21,7 +21,7 @@ test('full: basic fuzzy search', async () => {
   const c = FuzzyCorpus.strings(['src/main.dart', 'lib/widget.dart', 'README.md', '中文搜索']);
   assert.equal(c.length, 4);
   const hits = c.fuzzy('main');
-  assert.equal(hits[0].obj, 'src/main.dart');
+  assert.equal(hits[0].raw, 'src/main.dart');
   assert.ok(hits[0].score > 0);
   c.dispose();
 });
@@ -41,7 +41,7 @@ test('full: byKey + byKeys (Dart-aligned)', async () => {
   await ffuzzyInitialize();
   const rows = [{ name: 'Acme Inc', city: 'Boston' }, { name: 'Globex', city: 'Acme City' }];
   const byName = FuzzyCorpus.byKey(rows, 'name');
-  assert.equal(byName.fuzzy('acme')[0].obj.name, 'Acme Inc');
+  assert.equal(byName.fuzzy('acme')[0].raw.name, 'Acme Inc');
   byName.dispose();
 
   const byBoth = FuzzyCorpus.byKeys(rows, ['name', 'city']);
@@ -57,7 +57,7 @@ test('full: addKey multi-key + matchedKind', async () => {
     FuzzyKey.kind('zs', FuzzyKeyKind.initials),
   ]);
   const hits = c.fuzzy('zs');
-  assert.equal(hits[0].obj, '张三');
+  assert.equal(hits[0].raw, '张三');
   assert.equal(hits[0].matchedKind, FuzzyKeyKind.initials);
   c.dispose();
 });
@@ -85,12 +85,22 @@ test('full: mutation (removeAt / update / removeWhere)', async () => {
   c.dispose();
 });
 
-test('full: highlight indices + codepoint→utf16', async () => {
+test('full: highlight:true populates indices + highlightHtml', async () => {
   await ffuzzyInitialize();
   const c = FuzzyCorpus.strings(['café_münchen']);
-  const [hit] = c.fuzzy('cm');
+  // highlight:false (default) — indices is empty
+  const [fast] = c.fuzzy('cm');
+  assert.deepEqual(fast.indices, []);
+  // highlight:true — indices populated, fuzzyCodepointToUtf16 converts them
+  const [hit] = c.fuzzy('cm', { highlight: true });
   assert.ok(hit.indices.length >= 1);
-  assert.equal(fuzzyCodepointToUtf16('café_münchen', hit.indices).length, hit.indices.length);
+  const u16 = fuzzyCodepointToUtf16('café_münchen', hit.indices);
+  assert.equal(u16.length, hit.indices.length);
+  // highlightHtml wraps matched chars, merges adjacent, escapes HTML
+  const html = highlightHtml('src/main.dart', [0, 1, 2]);
+  assert.equal(html, '<mark>src</mark>/main.dart');
+  const safeHtml = highlightHtml('<b>item</b>', [0]);
+  assert.ok(safeHtml.startsWith('<mark>&lt;</mark>') || safeHtml.includes('&lt;'));
   c.dispose();
 });
 
@@ -106,7 +116,8 @@ test('lite: separate bundle, ASCII + CJK', async () => {
   const lite = await import('../ffuzzy-lite.js');
   await lite.ffuzzyInitialize();
   const c = lite.FuzzyCorpus.strings(['中文搜索', 'apple', 'app store']);
-  assert.deepEqual(c.substring('中文').map((h) => h.obj), ['中文搜索']);
+  const hits = c.substring('中文');
+  assert.deepEqual(hits.map((h) => h.raw), ['中文搜索']);
   assert.ok(c.fuzzy('app').length >= 2);
   c.dispose();
 });

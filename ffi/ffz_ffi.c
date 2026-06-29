@@ -116,6 +116,27 @@ FFZ_API ffz_results *ffz_ffi_filter_ex(ffz_corpus *c, const char *q, size_t qn,
     return ffz_ffi_filter_ex2(c, q, qn, mode, cm, nm, parallel, threads, limit,
                               FFZ_SCORE_FAST);
 }
+// Like ffz_ffi_filter_ex2 but skips per-survivor index computation (Pass 2).
+// Results have empty indices; score/kind/key/item are still valid.
+// Use ffz_ffi_results_item() to map results back to corpus items.
+FFZ_API ffz_results *ffz_ffi_filter_raws(ffz_corpus *c, const char *q, size_t qn,
+                                          int mode, int cm, int nm,
+                                          int parallel, int threads,
+                                          size_t limit, int scoring) {
+    if (!c || !q) return NULL;
+    if ((unsigned)mode    > FFZ_EXACT        ||
+        (unsigned)cm      > FFZ_CASE_SMART   ||
+        (unsigned)nm      > FFZ_NORM_SMART   ||
+        (unsigned)scoring > FFZ_SCORE_NUCLEO) return NULL;
+    ffz_results *r = (ffz_results *)calloc(1, sizeof(ffz_results));
+    if (!r) return NULL;
+    ffz_parallel par;
+    par.parallel = parallel != 0;
+    par.threads  = threads;
+    ffz_corpus_filter_raws(c, q, qn, (ffz_case_matching)cm, (ffz_normalization)nm,
+                           (ffz_mode)mode, par, limit, (ffz_scoring_mode)scoring, r);
+    return r;
+}
 // Back-compat default (smart case + smart normalize).
 FFZ_API ffz_results *ffz_ffi_filter(ffz_corpus *c, const char *q, size_t qn,
                                     int mode, int parallel, int threads,

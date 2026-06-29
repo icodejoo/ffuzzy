@@ -20,7 +20,7 @@ ffuzzy/                         ← 仓库根 = 发布包根
 ├── src/*.c                     # C 引擎核心（ffz_chars/corpus/fuzzy/match/…）
 ├── ffi/ffz_ffi.c               # dart:ffi ABI 胶合层（FFZ_API 导出）
 ├── include/ffz.h               # 公共 C 头
-├── include/ffz_corpus.h        # corpus/filter/results 头
+├── include/ffz_corpus.h        # corpus/filter/results 头（含 ffz_corpus_filter_raws）
 ├── android/CMakeLists.txt      # → ../CMakeLists.txt
 ├── ios/ffuzzy.podspec          # 静态链接 src/*.c + ffi/ffz_ffi.c
 ├── macos/ffuzzy.podspec        # 同上
@@ -29,7 +29,7 @@ ffuzzy/                         ← 仓库根 = 发布包根
 ├── CMakeLists.txt              # 根：编 libffz.so / ffz.dll（debug/release 自动切换）
 ├── example/                    # 演示 App
 ├── test/                       # Flutter 单元测试（flutter test）
-├── tool/ffi_smoke.dart         # 冒烟脚本（dart run tool/ffi_smoke.dart）
+├── scripts/ffi_smoke.dart      # 冒烟脚本（dart run scripts/ffi_smoke.dart）
 └── wasm/                       # WASM/npm 包 @codejoo/ffuzzy（见末节）
 ```
 
@@ -44,13 +44,12 @@ FuzzyCorpus.strings(items, {…})             // T = String
 FuzzyCorpus.byKey(maps, field, {…})         // T = Map<String,dynamic>，按单字段搜
 FuzzyCorpus.byKeys(maps, fields, {…})       // T = Map<String,dynamic>，跨多字段；hit.matchedKey = 命中字段下标
 FuzzyCorpus.buildAsync(items, stringOf:, {…}) // 后台 isolate 建库，不卡 UI
-// FuzzyCorpus.keyed 已废弃 → 用 byKey
 ```
 
 **增删改**
 ```
 add / addAll / addAllAsync    # addAllAsync 独占写，期间搜索/改/dispose 抛 StateError
-addKey(item, List<FuzzyKey>)  # CJK 拼音/罗马音场景：同一条目挂多种转写键（原 addKeyed）
+addKey(item, List<FuzzyKey>)  # CJK 拼音/罗马音场景：同一条目挂多种转写键
 update / removeAt / removeWhere / refresh([source]) / clear
 ```
 > `addKey` 仅用于"存汉字但用拼音输入"场景；纯中文搜中文直接用 `add/addAll`。
@@ -61,6 +60,15 @@ fuzzy / substring / prefix / postfix / suffix / exact
 ```
 - 均可传命名参数覆盖 `FuzzyOptions`（`caseMatching`/`normalization`/`parallel`/`threads`/`limit`/`highlight`/`scoring`）。
 - `corpus.one.fuzzy(q)` → `FuzzyHit<T>?`（top-1 或 null，零额外开销）。
+
+**原始对象快捷方式（`*Raws`）**
+```
+fuzzyRaws / substringRaws / prefixRaws / postfixRaws / suffixRaws / exactRaws
+```
+- 各带 `…Async` 孪生，返回 `List<T>` / `Future<List<T>>`。
+- `corpus.one` 也有 `fuzzyRaw` / `prefixRaw` … 返回 `T?`。
+- C 端调用 `ffz_ffi_filter_raws`，跳过 Pass 2（不计算命中字符位置），速度更快。
+- 适合纯过滤/排序场景（不需要高亮）。
 
 **生命周期**
 ```
@@ -79,19 +87,19 @@ NativeFinalizer    # GC 兜底，但推荐显式 dispose
 | `parallel` | `false` | 多线程打分 |
 | `threads` | `0` | 0=自动（半核，上限8；硬上限cpu-1；<512项恒串行） |
 | `limit` | `0` | 最多返回数（0=全部） |
-| `highlight` | `true` | false 跳过 match indices（更快） |
+| `highlight` | **`false`** | **`true` 时触发 Pass 2，填充 `FuzzyHit.indices`（用于高亮）；默认 `false` 跳过以提速** |
 
 ### FuzzyHit\<T\>
 
 | 字段 | 说明 |
 |------|------|
-| `obj` | 命中的原始对象 |
+| `raw` | 命中的原始对象（**注意：曾叫 `obj`，已改名**） |
 | `index` | 插入顺序下标 |
 | `score` | 匹配分（同一次查询内可比较） |
 | `matchedKind` | `FuzzyKeyKind` 枚举（original/pinyin/initials/romaji/custom） |
-| `matchedKindCode` | 原始整数 kind 值；内置 kind 与 `matchedKind.code` 相同；`addKey` 自定义 kind（100,101…）在此保留原值，`matchedKind` 均为 `custom` |
+| `matchedKindCode` | 原始整数 kind 值；内置 kind 与 `matchedKind.code` 相同；`addKey` 自定义 kind（100,101…）在此保留原值 |
 | `matchedKey` | 该条目内哪个键命中（0=original；`byKeys` 下等于 `fields` 下标） |
-| `indices` | 命中字符的**码点**下标（传给 `fuzzyCodepointToUtf16` 后用于高亮） |
+| `indices` | 命中字符的**码点**下标（**仅 `highlight:true` 时有值**，否则为空；传给 `fuzzyCodepointToUtf16` 后用于高亮） |
 
 ### FuzzyKey / FuzzyKeyKind
 
@@ -110,6 +118,22 @@ FuzzyScoring.off     // 不打分，按插入顺序返回（ID匹配/唯一匹�
 FuzzyScoring.nucleo  // 全矩阵DP，精度最高，约 2× CPU 开销
 ```
 
+### 高亮工具
+
+```dart
+// 搜索时传 highlight: true 才有 indices，否则为空
+final hits = corpus.fuzzy('src', highlight: true);
+final u16 = fuzzyCodepointToUtf16(hits.first.raw, hits.first.indices);
+// → UTF-16 偏移，用于 TextSpan
+```
+
+## C 端架构要点
+
+- `ffz_corpus_filter` → 正常 Pass 2（计算命中字符位置）
+- `ffz_corpus_filter_raws` → 跳过 Pass 2，速度更快，indices 为空
+- `ffz_ffi_filter_raws` → FFI 导出，Dart `_searchRaws`/`*Raws` 系列调用此函数
+- `highlight:false`（默认）→ 调用 `filterRaws`；`highlight:true` → 调用 `filterEx2`
+
 ## 并发模型
 
 - 原生 corpus 允许**并发读**（每次 filter 各自 malloc matcher scratch，线程安全），**写需独占**。
@@ -122,7 +146,7 @@ FuzzyScoring.nucleo  // 全矩阵DP，精度最高，约 2× CPU 开销
 
 **只改了 Dart（lib/ 或 test/）**——直接：
 ```bash
-dart analyze lib/ test/ tool/ example/lib/
+dart analyze lib/ test/ scripts/ example/lib/
 flutter test test/
 ```
 
@@ -151,6 +175,7 @@ cd example && flutter run -d <device>
 - **Android 构建（仅本机网络）**：JDK 信任库不认 TLS 拦截代理 → `example/android/gradle.properties` 加 `systemProp.javax.net.ssl.trustStoreType=Windows-ROOT`；Maven 加阿里云镜像。这些是**本机配置，勿提交**。
 - **JDK**：`flutter config --jdk-dir "C:\sdk\jdk\openjdk-21.0.5+11"`。
 - **`reachabilityFence`**：`dart:ffi` 的 `reachabilityFence` 在本机 SDK 路径下解析失败（Dart 3.12.2 + Windows），改用 `_keepAlive()`（读实例字段，等效保活语义）。
+- **Emscripten（WASM 重建）**：emsdk 在 `C:\sdk\emsdk`；Python 3.13.3 embeddable 放在 `C:\sdk\emsdk\python\3.13.3_64bit\`（bootstrap 用）。`build-engine.sh` 已有自动探测路径，直接 `npm run build:engine` 即可。
 
 ## CI / 推送踩坑
 
@@ -175,26 +200,36 @@ flutter pub publish
 
 **目录（扁平）**：
 - `ffuzzy-corpus.mjs` — 手写 wrapper（高层 API，唯一源），追加进每个 engine。
-- `ffuzzy.engine.mjs` / `ffuzzy-lite.engine.mjs` — emcc 产物（SINGLE_FILE，wasm 以 `binaryDecode` 二进制串内联，**非 base64**），构建输入。
-- `ffuzzy.js` / `ffuzzy-lite.js` — 发布产物 = engine + wrapper。
-- `ffuzzy.d.ts` / `ffuzzy-lite.d.ts` — 手写类型。
+- `ffuzzy.engine.mjs` / `ffuzzy-lite.engine.mjs` — emcc 产物（SINGLE_FILE，wasm 内联），构建输入。
+- `ffuzzy.js` / `ffuzzy-lite.js` — 发布产物 = engine + wrapper（由 build.mjs 生成）。
+- `ffuzzy.d.ts.src` / `ffuzzy-lite.d.ts.src` — **可编辑的类型声明源文件**（勿直接编辑 `.d.ts`）。
+- `ffuzzy.d.ts` / `ffuzzy-lite.d.ts` — **由 `npm run build` 从 `.d.ts.src` 生成**，勿手改。
 - `lite-tables.c` — 空表 stub（lite 用，passthrough）。
-- `build-engine.sh`（emcc）/ `build.mjs`（node 拼包）/ `test/smoke.test.mjs`。
+- `build-engine.sh`（emcc）/ `build.mjs`（node 拼包 + 生成 d.ts）/ `test/smoke.test.mjs`。
 
 **构建命令**：
 ```bash
 cd wasm
-npm run build          # 快路：engine + wrapper -> *.js（改 wrapper 后用）
-npm run build:engine   # 慢路：emcc 重编 engine（需 source emsdk_env.sh）
+npm run build          # 快路：engine + wrapper -> *.js + 从 *.d.ts.src 生成 *.d.ts
+npm run build:engine   # 慢路：emcc 重编 engine（emsdk 在 C:\sdk\emsdk）
 npm test               # build + node --test（10/10）
 npm publish            # publishConfig.access=public 已设
 ```
 
+**WASM 高亮便利函数**：
+```js
+// highlight:true 时填充 FuzzyHit.indices
+const hits = corpus.fuzzy('src', { highlight: true });
+element.innerHTML = highlightHtml(hits[0].raw, hits[0].indices);
+// → '<mark>src</mark>/main.dart'（内置 HTML 转义，防 XSS）
+// 自定义标签：highlightHtml(text, indices, { tag: 'b' })
+```
+
 **关键约束**：
-- engine 必须 `-sENVIRONMENT=web,worker`（**不带 node**，否则 `node:module` import 让浏览器打包器报错；web,worker 仍能在 node 跑因 wasm 内联）。
-- **API 对齐 Dart**：`await ffuzzyInitialize()` 一次 → 同步用 `FuzzyCorpus.strings/byKey/byKeys`（非 keyed）、`addKey`（非 addKeyed）、`update/removeAt/removeWhere/refresh`、`FuzzyScoring`。WASM 模块藏内部不传句柄。
-- lite = `lite-tables.c` 空表 + `-DFFZ_COMPACT_CLASS`（砍 unicode 表 + class 表；**无 `FFZ_ASCII_NORM` 宏**）。
-- 体积：bundle `ffuzzy.js` 62KB(gzip 26) / `ffuzzy-lite.js` 48KB(gzip 19)。
+- engine 必须 `-sENVIRONMENT=web,worker`（**不带 node**）。
+- **API 对齐 Dart**：`FuzzyHit.raw`（非 `obj`）、`highlight` 默认 `false`、`*Raws` 系列方法、`highlightHtml` 便利函数。
+- lite = `lite-tables.c` 空表 + `-DFFZ_COMPACT_CLASS`。
+- 类型修改：只改 `*.d.ts.src`，`npm run build` 生成 `*.d.ts`。
 
 > 注：旧 Rust + frb 引擎(原 `benchmark/`)及差分/perf 测试(`tests/difftest`、`tests/perf`)已删除。
 > 引擎与 nucleo 0.3.1 的逐字节一致性是历史已验证保证(见 `doc/INTERNALS.md`)。

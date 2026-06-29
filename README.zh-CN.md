@@ -13,7 +13,7 @@ matcher)的纯 C 逐字节复刻:无需 Rust 工具链、无代码生成,引擎�
 - **小** —— 原生 `.so`(arm64)约 32 KB,纯 C,零第三方依赖。
 - **全平台** —— Android / iOS / macOS / Linux / Windows。源码随各平台构建打包,使用者
   无需额外工具链。*(不支持 web —— web 上没有 `dart:ffi`。)*
-- **可搜任意对象** —— `FuzzyCorpus<T>` 搜索 `List<T>`,命中携带原对象(`hit.obj`)。
+- **可搜任意对象** —— `FuzzyCorpus<T>` 搜索 `List<T>`,命中携带原对象(`hit.raw`)。
 - **匹配模式即方法** —— `fuzzy`(fzf 风格,支持 `! ^ ' $` 操作符)、`substring`、`prefix`、
   `postfix`、`exact`,各带 `…Async` 异步孪生。
 - **多线程**与**异步**扫描,大语料也不卡 UI。
@@ -39,13 +39,13 @@ import 'package:ffuzzy/ffuzzy.dart';
 // 纯字符串:
 final corpus = FuzzyCorpus.strings(['src/main.dart', 'lib/widget.dart', '中文搜索']);
 for (final h in corpus.fuzzy('srcmn', parallel: true, limit: 50)) {
-  print('${h.obj}  score=${h.score}');   // h.obj 就是命中的字符串
+  print('${h.raw}  score=${h.score}');   // h.raw 就是命中的字符串
 }
 corpus.dispose();                          // 或交给 NativeFinalizer 回收
 
 // 任意对象 —— 给一个 stringOf 提取器;命中携带原对象:
 final files = FuzzyCorpus<File>(myFiles, stringOf: (f) => f.path);
-final hit = files.prefix('lib/').firstOrNull;   // hit.obj 是 File
+final hit = files.prefix('lib/').firstOrNull;   // hit.raw 是 File
 ```
 
 > `FuzzyCorpus` 持有原生内存,且只能在创建它的 isolate 上使用。模式方法在调用 isolate
@@ -82,7 +82,7 @@ FuzzyCorpus<T>(
 // 纯字符串便捷构造(item 即其搜索文本):
 static FuzzyCorpus<String> FuzzyCorpus.strings(Iterable<String> items, {…})
 
-// List<Map> 按单个字段搜索；hit.obj 是整张 map:
+// List<Map> 按单个字段搜索；hit.raw 是整张 map:
 static FuzzyCorpus<Map<String, dynamic>> FuzzyCorpus.byKey(
     Iterable<Map<String, dynamic>> items, String field, {…})
 
@@ -137,8 +137,13 @@ List<FuzzyHit<T>> exact(String query, {…覆盖项});      Future<…> exactAsy
 - **`fuzzy`** 会把查询解析成空格分隔的多个词项 + fzf 操作符(`!` 取反、`^` 前缀、`'` 子串、
   `$` 后缀)—— 所以 `'lib parse'` 是两个词项的 AND。其他模式把整个查询当作一个字面原子。
 - **覆盖项**(`{FuzzyCase? caseMatching, FuzzyNorm? normalization, bool? parallel,
-  int? threads, int? limit, bool? highlight}`):每个非 null 实参仅对**该次调用**覆盖
-  corpus 的 [`FuzzyOptions`](#fuzzyoptions) 对应字段,如 `corpus.fuzzy(q, limit: 50)`。
+  int? threads, int? limit, bool? highlight, FuzzyScoring? scoring}`):每个非 null
+  实参仅对**该次调用**覆盖 corpus 的 [`FuzzyOptions`](#fuzzyoptions) 对应字段，如
+  `corpus.fuzzy(q, limit: 50)` 或 `corpus.fuzzy(q, highlight: true)`。
+- **原始对象快捷方式** —— 只需要命中 item、不需要 score/indices 等元数据时，`*Raws`
+  系列方法跳过 `FuzzyHit` 包装、速度更快：`fuzzyRaws`、`substringRaws`、`prefixRaws`、
+  `postfixRaws`、`suffixRaws`、`exactRaws`（各带 `…Async` 孪生）。`corpus.one`
+  也新增 `fuzzyRaw`、`prefixRaw`… 系列，返回 `T?`。
 - **取最佳单条**:`corpus.one` 是一个视图,暴露同样的 5 个模式,但各返回 `FuzzyHit<T>?`
   (top-1 或 null)而非列表 —— `corpus.one.fuzzy(q)`、`corpus.one.prefix(q)`、…(+ `…Async`)。
   它跑的是与 `fuzzy(q, limit: 1)` **完全相同**的原生扫描,无额外开销。
@@ -181,7 +186,7 @@ void dispose() {
 | `parallel` | `bool` | `false` | 多线程打分 |
 | `threads` | `int` | `0` | `0`=自动(CPU 一半,上限 8;硬上限 cpu-1;<512 项恒串行) |
 | `limit` | `int` | `0` | 最多返回数(`0`=全部) |
-| `highlight` | `bool` | `true` | `false` 跳过读取命中下标(更快) |
+| `highlight` | `bool` | `false` | `true` 触发 Pass 2，填充 `FuzzyHit.indices`（用于高亮）；`false`（默认）跳过以提速。 |
 | `scoring` | `FuzzyScoring` | `FuzzyScoring.fast` | 打分算法：`fast`（滚动 DP，默认）、`off`（不排名，按插入顺序）、`nucleo`（全矩阵 DP，精度最高，CPU 约 2×）。 |
 
 `FuzzyOptions` 还有 `copyWith(...)`。示例:
@@ -199,13 +204,13 @@ corpus.fuzzy('bar', limit: 10);    // 同样默认,但本次 limit 覆盖为 10
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `obj` | `T` | 命中的原始 item。 |
+| `raw` | `T` | 命中的原始 item。 |
 | `index` | `int` | 该 item 在语料中的插入序号。 |
 | `score` | `int` | 匹配分(越高越好)。 |
 | `matchedKind` | `FuzzyKeyKind` | 命中的键种类(original / pinyin / …)。 |
 | `matchedKindCode` | `int` | 命中键的原始整数 kind 值（如 `100`、`101`）。内置 kind 与 `matchedKind.code` 相同；对通过 `addKey`/`byKeys` 添加的宿主自定义键，此字段保留原始数值，可区分 `matchedKind` 均显示 `custom` 的多种自定义键类型。 |
 | `matchedKey` | `int` | 命中的是该 item 的哪个键(`0`==原键)。 |
-| `indices` | `List<int>` | 命中键内的**码点**下标 —— 用于 Dart `String` 前先经 [`fuzzyCodepointToUtf16`](#高亮) 转换。 |
+| `indices` | `List<int>` | 命中键内的**码点**下标。**仅 `highlight: true` 时有值**，否则为空。用于 Dart `String` 前先经 [`fuzzyCodepointToUtf16`](#高亮) 转换。 |
 
 ## 枚举
 
@@ -256,12 +261,13 @@ corpus.fuzzy('bar', limit: 10);    // 同样默认,但本次 limit 覆盖为 10
 List<int> fuzzyCodepointToUtf16(String text, List<int> codepointIndices)
 ```
 
-`FuzzyHit.indices` 是码点位置;Dart 字符串是 UTF-16。构建 `TextSpan` 前先转换,
-以免 emoji / 星平面字符错位:
+搜索时传 `highlight: true` 才会填充 `FuzzyHit.indices`（默认 `false` 以节省 Pass 2
+开销）。`indices` 是码点位置；Dart 字符串是 UTF-16，构建 `TextSpan` 前先转换，
+以免 emoji / 星平面字符错位：
 
 ```dart
-final hit = corpus.fuzzy('src').first;
-final text = hit.obj as String;                       // 或 stringOf(hit.obj)
+final hit = corpus.fuzzy('src', highlight: true).first;
+final text = hit.raw as String;
 final marks = fuzzyCodepointToUtf16(text, hit.indices).toSet();
 final spans = [
   for (var i = 0; i < text.length; i++)
@@ -359,7 +365,7 @@ strip 的 release 打印偏移,需用随包的 `.debug` / `.pdb` / `.dSYM` 离�
   会抛 `StateError`;反之异步构建在写时发起搜索也会抛。先 await(或 [`disposeAndWait`](#生命周期))。
 
 **内存 / CPU** —— 常驻语料为每个 item 的文本存一份原生副本(这就是"索引");Dart 侧还保留
-你的 `List<T>` 以还原 `hit.obj`,所以大致按"文本存两份 + 你的对象"估算。搜索只分配一次性的
+你的 `List<T>` 以还原 `hit.raw`,所以大致按"文本存两份 + 你的对象"估算。搜索只分配一次性的
 结果缓冲(用完即释放)—— 反复搜索**不会**增长内存。注意 `…Async` 每次会启一个短命 isolate,
 所以每键入一字符就发一次会造成无谓开销 —— 见下。
 
