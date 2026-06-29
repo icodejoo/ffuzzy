@@ -73,12 +73,28 @@ export class FuzzyOptions {
   }
 }
 
+// Read a (possibly dotted) path from an object, e.g. 'platform.id'.
+// Returns '' for any missing key or null/undefined value — never throws.
+function _get(obj, path) {
+  if (obj == null) return '';
+  if (!path.includes('.')) return String(obj[path] ?? '');
+  let cur = obj;
+  for (const k of path.split('.')) {
+    if (cur == null) return '';
+    cur = cur[k];
+  }
+  return String(cur ?? '');
+}
+
 function _utf8(M, s) {
   const n = M.lengthBytesUTF8(s);
   const p = M._malloc(n + 1);
   M.stringToUTF8(s, p, n + 1);
   return [p, n];
 }
+
+// Initial scratch capacity (uint32 slots). Grows if a query returns more hits.
+const SCRATCH_INIT = 256;
 
 export class FuzzyCorpus {
   #M;
@@ -88,6 +104,11 @@ export class FuzzyCorpus {
   #stringOf;
   #opts;
   #disposed = false;
+  // Pre-allocated scratch buffers — reused across calls to avoid malloc/free per query.
+  // #scratch holds item indices; #scratch4 holds [items, scores, kinds, keys] × cap.
+  #scratch;     // uint32_t* for bulk item-index reads  (capacity = #scratchCap)
+  #scratch4;    // uint32_t* for full-hit bulk reads    (capacity = #scratchCap × 4)
+  #scratchCap = 0;
 
   constructor(items = [], {
     stringOf = String,
@@ -104,7 +125,22 @@ export class FuzzyCorpus {
       ? M._ffz_ffi_new_cfg2(matchPaths ? 1 : 0, preferPrefix ? 1 : 0, sc)
       : M._ffz_ffi_new_cfg(matchPaths ? 1 : 0, preferPrefix ? 1 : 0);
     if (!this.#ptr) throw new Error('FuzzyCorpus: native allocation failed (out of memory)');
+    this.#allocScratch(SCRATCH_INIT);
     this.addAll(items);
+  }
+
+  // Allocate (or grow) the scratch buffers.
+  #allocScratch(cap) {
+    const M = this.#M;
+    if (this.#scratchCap) { M._free(this.#scratch); M._free(this.#scratch4); }
+    this.#scratch  = M._malloc(cap * 4);          // uint32_t[cap]
+    this.#scratch4 = M._malloc(cap * 4 * 4);      // uint32_t[cap × 4]
+    this.#scratchCap = cap;
+  }
+
+  // Ensure scratch is large enough; doubles if needed.
+  #ensureScratch(n) {
+    if (n > this.#scratchCap) this.#allocScratch(Math.max(n, this.#scratchCap * 2));
   }
 
   /** Plain-string corpus — each item is its own search text. */
@@ -112,22 +148,23 @@ export class FuzzyCorpus {
     return new FuzzyCorpus(items, { ...opts, stringOf: String });
   }
 
-  /** Record-map corpus searched by one string [field]. */
+  /** Record-map corpus searched by one [field] (supports dot-notation: 'a.b'). */
   static byKey(maps = [], field, opts = {}) {
-    return new FuzzyCorpus(maps, { ...opts, stringOf: (m) => String(m[field] ?? '') });
+    return new FuzzyCorpus(maps, { ...opts, stringOf: (m) => _get(m, field) });
   }
 
-  /** Record-map corpus searched across multiple [fields]. The first is the
-   *  primary key; the rest become alternate keys. `hit.matchedKey` is the index
-   *  into [fields] that produced the hit. */
+  /** Record-map corpus searched across multiple [fields] (supports dot-notation).
+   *  The first is the primary key; the rest become alternate keys.
+   *  `hit.matchedKey` is the index into [fields] that produced the hit.
+   *  Missing or null fields are silently treated as empty string. */
   static byKeys(maps = [], fields, opts = {}) {
     if (!fields || fields.length === 0) throw new Error('byKeys: fields must not be empty');
-    const corpus = new FuzzyCorpus([], { ...opts, stringOf: (m) => String(m[fields[0]] ?? '') });
+    const corpus = new FuzzyCorpus([], { ...opts, stringOf: (m) => _get(m, fields[0]) });
     for (const item of maps) {
       if (fields.length === 1) {
         corpus.add(item);
       } else {
-        corpus.addKey(item, fields.slice(1).map((f) => new FuzzyKey(String(item[f] ?? ''), FuzzyKeyKind.custom)));
+        corpus.addKey(item, fields.slice(1).map((f) => new FuzzyKey(_get(item, f), FuzzyKeyKind.custom)));
       }
     }
     return corpus;
@@ -204,27 +241,18 @@ export class FuzzyCorpus {
     this.#keys.length = 0;
   }
 
-  fuzzy    (query, opts = {}) { return this.#search(0, query, opts); }
-  substring(query, opts = {}) { return this.#search(1, query, opts); }
-  prefix   (query, opts = {}) { return this.#search(2, query, opts); }
-  postfix  (query, opts = {}) { return this.#search(3, query, opts); }
-  exact    (query, opts = {}) { return this.#search(4, query, opts); }
+  /** Fuzzy (subsequence) search. Query supports `!`/`^`/`'`/`$` operators. */
+  fuzzy(query, opts = {}) { return this.#search(0, query, opts); }
 
-  /** Fuzzy search — returns raw items without FuzzyHit wrapper. Faster: skips highlight-index computation. */
-  fuzzyRaws    (query, opts = {}) { return this.#searchRaws(0, query, opts); }
-  /** Substring search — raw items. */
-  substringRaws(query, opts = {}) { return this.#searchRaws(1, query, opts); }
-  /** Prefix search — raw items. */
-  prefixRaws   (query, opts = {}) { return this.#searchRaws(2, query, opts); }
-  /** Postfix search — raw items. */
-  postfixRaws  (query, opts = {}) { return this.#searchRaws(3, query, opts); }
-  /** Exact search — raw items. */
-  exactRaws    (query, opts = {}) { return this.#searchRaws(4, query, opts); }
+  /** Fuzzy search — raw `T[]` only, no FuzzyHit wrapper. Faster: skips highlight-index computation. */
+  fuzzyRaws(query, opts = {}) { return this.#searchRaws(0, query, opts); }
 
   dispose() {
     if (this.#disposed) return;
     this.#disposed = true;
-    this.#M._ffz_ffi_free(this.#ptr);
+    const M = this.#M;
+    M._ffz_ffi_free(this.#ptr);
+    if (this.#scratchCap) { M._free(this.#scratch); M._free(this.#scratch4); }
   }
 
   [Symbol.dispose]() { this.dispose(); }
@@ -286,36 +314,67 @@ export class FuzzyCorpus {
     return res;
   }
 
+  // FuzzyHit path. highlight=false: bulk-read all 4 fields in 1 WASM call.
+  // highlight=true: bulk-read 4 fields + per-hit index reads (rare path).
   #search(mode, query, overrides) {
     this.#alive();
     const M = this.#M;
     const o = { ...this.#opts, ...overrides };
     const res = this.#filter(mode, query, o);
-    const hits = [];
-    const len = M._ffz_ffi_results_len(res);
-    const canReadIdx = o.highlight && typeof M._ffz_ffi_results_nindices === 'function';
-    for (let i = 0; i < len; i++) {
-      const index = M._ffz_ffi_results_item(res, i);
-      let indices = [];
-      if (canReadIdx) {
-        const ni = M._ffz_ffi_results_nindices(res, i);
-        indices = Array.from({ length: ni }, (_, j) => M._ffz_ffi_results_index(res, i, j));
+    const len = M._ffz_ffi_results_len(res);   // 1 WASM call
+    if (len === 0) { M._ffz_ffi_results_free(res); return []; }
+
+    const hasBulk = typeof M._ffz_ffi_results_bulk === 'function';
+    const hits = new Array(len);
+
+    if (hasBulk && !o.highlight) {
+      // Fast path: 1 WASM call fills items+scores+kinds+keys into scratch buffers.
+      this.#ensureScratch(len);
+      const sp = this.#scratch4 >> 2;          // HEAPU32 offset (uint32_t stride)
+      const itemsOff  = sp;
+      const scoresOff = sp + len;
+      const kindsOff  = sp + len * 2;
+      const keysOff   = sp + len * 3;
+      M._ffz_ffi_results_bulk(res,
+        this.#scratch4,              // items ptr
+        this.#scratch4 + len * 4,    // scores ptr (int32, same byte stride as uint32)
+        this.#scratch4 + len * 8,    // kinds ptr
+        this.#scratch4 + len * 12,   // keys ptr
+        len);                        // 1 WASM call
+      const H = M.HEAPU32;
+      const I = M.HEAP32;
+      for (let i = 0; i < len; i++) {
+        const idx = H[itemsOff + i];
+        hits[i] = {
+          raw: this.#items[idx], index: idx,
+          score: I[scoresOff + i], matchedKind: I[kindsOff + i],
+          matchedKey: H[keysOff + i], indices: [],
+        };
       }
-      hits.push({
-        raw: this.#items[index],
-        index,
-        score: M._ffz_ffi_results_score(res, i),
-        matchedKind: M._ffz_ffi_results_kind(res, i),
-        matchedKey: M._ffz_ffi_results_key(res, i),
-        indices,
-      });
+    } else {
+      // Slow path (highlight:true or no bulk): per-hit WASM calls.
+      const canIdx = o.highlight && typeof M._ffz_ffi_results_nindices === 'function';
+      for (let i = 0; i < len; i++) {
+        const idx = M._ffz_ffi_results_item(res, i);
+        let indices = [];
+        if (canIdx) {
+          const ni = M._ffz_ffi_results_nindices(res, i);
+          indices = Array.from({ length: ni }, (_, j) => M._ffz_ffi_results_index(res, i, j));
+        }
+        hits[i] = {
+          raw: this.#items[idx], index: idx,
+          score: M._ffz_ffi_results_score(res, i),
+          matchedKind: M._ffz_ffi_results_kind(res, i),
+          matchedKey: M._ffz_ffi_results_key(res, i),
+          indices,
+        };
+      }
     }
-    M._ffz_ffi_results_free(res);
+    M._ffz_ffi_results_free(res);   // 1 WASM call
     return hits;
   }
 
-  // Returns raw items only (no FuzzyHit wrapper). Uses ffz_ffi_filter_raws
-  // when available (skips C-side index computation); falls back to regular filter.
+  // Raw-items path. Bulk-reads only item indices in 1 WASM call.
   #searchRaws(mode, query, overrides) {
     this.#alive();
     const M = this.#M;
@@ -329,11 +388,25 @@ export class FuzzyCorpus {
     } else {
       res = this.#filter(mode, query, o);
     }
-    const items = [];
-    const len = M._ffz_ffi_results_len(res);
-    for (let i = 0; i < len; i++) items.push(this.#items[M._ffz_ffi_results_item(res, i)]);
-    M._ffz_ffi_results_free(res);
-    return items;
+    const len = M._ffz_ffi_results_len(res);   // 1 WASM call
+    if (len === 0) { M._ffz_ffi_results_free(res); return []; }
+
+    const hasBulk = typeof M._ffz_ffi_results_items_bulk === 'function';
+    let out;
+    if (hasBulk) {
+      // Fast path: 1 WASM call writes all indices into scratch, 0 per-item calls.
+      this.#ensureScratch(len);
+      M._ffz_ffi_results_items_bulk(res, this.#scratch, len);   // 1 WASM call
+      const H = M.HEAPU32;
+      const base = this.#scratch >> 2;
+      out = new Array(len);
+      for (let i = 0; i < len; i++) out[i] = this.#items[H[base + i]];
+    } else {
+      out = [];
+      for (let i = 0; i < len; i++) out.push(this.#items[M._ffz_ffi_results_item(res, i)]);
+    }
+    M._ffz_ffi_results_free(res);   // 1 WASM call
+    return out;
   }
 
   #alive() {

@@ -225,11 +225,30 @@ element.innerHTML = highlightHtml(hits[0].raw, hits[0].indices);
 // 自定义标签：highlightHtml(text, indices, { tag: 'b' })
 ```
 
+**WASM 公开 API（只有 fuzzy）**：
+- `corpus.fuzzy(query, opts)` → `FuzzyHit<T>[]`
+- `corpus.fuzzyRaws(query, opts)` → `T[]`
+- **删除了**：prefix / postfix / exact / substring（及其 Raws 变体）
+- **原因**：性能基准显示这些模式在 WASM 下比 `Array.filter` 慢 2×；fuzzy 才是 WASM 主场（比 fuse.js 快 8-55×）
+
+**`byKey` / `byKeys` 泛型改造**：
+- `FuzzyCorpus.byKey<T>(items, field)` → `FuzzyCorpus<T>`，T 从 items 推断，hit.raw 类型化
+- `field` 支持点路径（`'platform.id'`），缺失字段静默返回 `''`
+- `FieldPath<T>` 类型工具：IDE 提供两级深度的路径补全
+
+**bulk 结果读取**（减少 JS→WASM 边界跨越）：
+- `ffz_ffi_results_items_bulk`：一次调用填充所有 item_index，从 O(N) 降为 O(1) WASM 调用
+- `ffz_ffi_results_bulk`：同时填充 items/scores/kinds/keys
+- wrapper 使用预分配 scratch buffer（`#scratch` / `#scratch4`），避免 per-query malloc
+
 **关键约束**：
 - engine 必须 `-sENVIRONMENT=web,worker`（**不带 node**）。
-- **API 对齐 Dart**：`FuzzyHit.raw`（非 `obj`）、`highlight` 默认 `false`、`*Raws` 系列方法、`highlightHtml` 便利函数。
+- `FuzzyHit.raw`（非 `obj`）、`highlight` 默认 `false`、`highlightHtml` 便利函数。
 - lite = `lite-tables.c` 空表 + `-DFFZ_COMPACT_CLASS`。
 - 类型修改：只改 `*.d.ts.src`，`npm run build` 生成 `*.d.ts`。
+
+**C 引擎已修复 bug**：
+- `exact/prefix/postfix/substring` 含空格的查询（如 `exact('Super Gems 1000')`）之前因 `for_each_word` 切词返回 0 命中，已在 `ffz_pattern.c` 修复：literal 模式不切词。
 
 > 注：旧 Rust + frb 引擎(原 `benchmark/`)及差分/perf 测试(`tests/difftest`、`tests/perf`)已删除。
 > 引擎与 nucleo 0.3.1 的逐字节一致性是历史已验证保证(见 `doc/INTERNALS.md`)。

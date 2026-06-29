@@ -112,6 +112,13 @@ export interface FuzzyHit<T = unknown> {
   indices: number[];
 }
 
+/** Dot-notation field paths for `T` (up to two levels deep). */
+export type FieldPath<T extends Record<string, any>> = {
+  [K in keyof T & string]: T[K] extends Record<string, any>
+    ? K | `${K}.${keyof T[K] & string}`
+    : K;
+}[keyof T & string];
+
 export interface FuzzyCorpusInit<T> {
   stringOf?: (item: T) => string;
   options?: Partial<FuzzyOptions> | FuzzyOptions;
@@ -122,8 +129,18 @@ export interface FuzzyCorpusInit<T> {
 export declare class FuzzyCorpus<T = string> {
   constructor(items?: Iterable<T>, init?: FuzzyCorpusInit<T>);
   static strings(items?: Iterable<string>, opts?: Omit<FuzzyCorpusInit<string>, 'stringOf'>): FuzzyCorpus<string>;
-  static byKey(maps: Iterable<Record<string, unknown>> | undefined, field: string, opts?: Omit<FuzzyCorpusInit<Record<string, unknown>>, 'stringOf'>): FuzzyCorpus<Record<string, unknown>>;
-  static byKeys(maps: Iterable<Record<string, unknown>> | undefined, fields: string[], opts?: Omit<FuzzyCorpusInit<Record<string, unknown>>, 'stringOf'>): FuzzyCorpus<Record<string, unknown>>;
+  /** Corpus searched by one field of `T`. Supports dot-notation; missing keys → `''`. */
+  static byKey<T extends Record<string, any>>(
+    maps: Iterable<T> | undefined,
+    field: FieldPath<T> | (string & {}),
+    opts?: Omit<FuzzyCorpusInit<T>, 'stringOf'>,
+  ): FuzzyCorpus<T>;
+  /** Corpus searched across multiple fields of `T`. `hit.matchedKey` is the field index. Supports dot-notation; missing keys → `''`. */
+  static byKeys<T extends Record<string, any>>(
+    maps: Iterable<T> | undefined,
+    fields: (FieldPath<T> | (string & {}))[],
+    opts?: Omit<FuzzyCorpusInit<T>, 'stringOf'>,
+  ): FuzzyCorpus<T>;
   readonly length: number;
   add(item: T): void;
   addAll(items: Iterable<T>): void;
@@ -133,16 +150,10 @@ export declare class FuzzyCorpus<T = string> {
   removeWhere(test: (item: T) => boolean): number;
   refresh(source?: Iterable<T>): void;
   clear(): void;
-  fuzzy    (query: string, opts?: Partial<FuzzyOptions>): FuzzyHit<T>[];
-  substring(query: string, opts?: Partial<FuzzyOptions>): FuzzyHit<T>[];
-  prefix   (query: string, opts?: Partial<FuzzyOptions>): FuzzyHit<T>[];
-  postfix  (query: string, opts?: Partial<FuzzyOptions>): FuzzyHit<T>[];
-  exact    (query: string, opts?: Partial<FuzzyOptions>): FuzzyHit<T>[];
-  fuzzyRaws    (query: string, opts?: Partial<FuzzyOptions>): T[];
-  substringRaws(query: string, opts?: Partial<FuzzyOptions>): T[];
-  prefixRaws   (query: string, opts?: Partial<FuzzyOptions>): T[];
-  postfixRaws  (query: string, opts?: Partial<FuzzyOptions>): T[];
-  exactRaws    (query: string, opts?: Partial<FuzzyOptions>): T[];
+  /** Fuzzy (subsequence) search. Returns ranked `FuzzyHit<T>[]`. */
+  fuzzy(query: string, opts?: Partial<FuzzyOptions>): FuzzyHit<T>[];
+  /** Fuzzy search — raw `T[]` only. */
+  fuzzyRaws(query: string, opts?: Partial<FuzzyOptions>): T[];
   dispose(): void;
   [Symbol.dispose](): void;
 }

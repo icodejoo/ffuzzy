@@ -1,6 +1,6 @@
 // Real usability tests of the built bundles, run with `node --test`.
-// API mirrors ffuzzy.dart (strings / byKey / byKeys / addKey / update /
-// removeAt / removeWhere / fuzzy / substring / prefix / postfix / exact).
+// High-level API: fuzzy() and fuzzyRaws() only.
+// For prefix/postfix/exact/substring use native Array.filter.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
@@ -26,14 +26,15 @@ test('full: basic fuzzy search', async () => {
   c.dispose();
 });
 
-test('full: all five modes', async () => {
+test('full: fuzzy search + fuzzyRaws', async () => {
   await ffuzzyInitialize();
   const c = FuzzyCorpus.strings(['alpha', 'alphabet', 'beta', 'al/pha']);
   assert.ok(c.fuzzy('alph').length >= 2);
-  assert.ok(c.substring('pha').length >= 1);
-  assert.ok(c.prefix('alpha').length >= 2);
-  assert.ok(c.postfix('bet').length >= 1);
-  assert.equal(c.exact('beta').length, 1);
+  assert.ok(c.fuzzy('bet').length >= 1);
+  // fuzzyRaws returns raw items directly
+  const raws = c.fuzzyRaws('alph');
+  assert.ok(raws.length >= 2);
+  assert.ok(typeof raws[0] === 'string');
   c.dispose();
 });
 
@@ -77,9 +78,9 @@ test('full: mutation (removeAt / update / removeWhere)', async () => {
   const c = FuzzyCorpus.strings(['apple', 'banana', 'cherry']);
   c.removeAt(0);
   assert.equal(c.length, 2);
-  assert.equal(c.exact('apple').length, 0);
+  assert.equal(c.fuzzy('apple').length, 0);        // 'apple' gone; 'banana'/'cherry' don't match
   c.update(0, 'blueberry');
-  assert.equal(c.exact('blueberry').length, 1);
+  assert.equal(c.fuzzy('blueberry')[0]?.raw, 'blueberry');
   assert.equal(c.removeWhere((s) => s.startsWith('b')), 1);
   assert.equal(c.length, 1);
   c.dispose();
@@ -116,7 +117,7 @@ test('lite: separate bundle, ASCII + CJK', async () => {
   const lite = await import('../ffuzzy-lite.js');
   await lite.ffuzzyInitialize();
   const c = lite.FuzzyCorpus.strings(['中文搜索', 'apple', 'app store']);
-  const hits = c.substring('中文');
+  const hits = c.fuzzy('中文');
   assert.deepEqual(hits.map((h) => h.raw), ['中文搜索']);
   assert.ok(c.fuzzy('app').length >= 2);
   c.dispose();

@@ -160,6 +160,24 @@ export interface FuzzyHit<T = unknown> {
 // FuzzyCorpus<T> — mirrors Dart's `FuzzyCorpus<T>`
 // ---------------------------------------------------------------------------
 
+/**
+ * Dot-notation field paths for `T` (up to two levels deep).
+ *
+ * Provides IDE autocomplete for both `'gameName'` and `'platform.id'`.
+ * Accepts any `string` as a fallback so deeper paths still compile.
+ *
+ * @example
+ * ```ts
+ * type K = FieldPath<{ gameName: string; platform: { id: number } }>;
+ * // → 'gameName' | 'platform' | 'platform.id'
+ * ```
+ */
+export type FieldPath<T extends Record<string, any>> = {
+  [K in keyof T & string]: T[K] extends Record<string, any>
+    ? K | `${K}.${keyof T[K] & string}`
+    : K;
+}[keyof T & string];
+
 /** Constructor options for `FuzzyCorpus`. */
 export interface FuzzyCorpusInit<T> {
   /** Extract the searchable text from each item. Default: `String`. */
@@ -184,10 +202,14 @@ export interface FuzzyCorpusInit<T> {
  * const corpus = FuzzyCorpus.strings(files.map(f => f.path));
  * corpus.fuzzy('src').forEach(h => console.log(h.raw, h.score));
  *
- * // Generic objects
- * const corpus = new FuzzyCorpus(files, { stringOf: f => f.path });
- * const hit = corpus.prefix('src/')[0];
- * hit.raw  // original File object
+ * // Typed objects — hit.raw is inferred as Game
+ * const corpus = new FuzzyCorpus(games, { stringOf: g => g.gameName });
+ * const hit = corpus.prefix('Super')[0];
+ * hit.raw.gameName;  // ← typed as Game
+ *
+ * // byKey / byKeys — T inferred from items, field autocomplete via FieldPath
+ * const c = FuzzyCorpus.byKeys(games, ['gameName', 'gameId']);
+ * c.exact('101024')[0].raw.gameId;  // typed as Game
  * ```
  */
 export declare class FuzzyCorpus<T = string> {
@@ -199,20 +221,39 @@ export declare class FuzzyCorpus<T = string> {
     opts?: Omit<FuzzyCorpusInit<string>, 'stringOf'>,
   ): FuzzyCorpus<string>;
 
-  /** Record-map corpus searched by one string [field]. */
-  static byKey(
-    maps: Iterable<Record<string, unknown>> | undefined,
-    field: string,
-    opts?: Omit<FuzzyCorpusInit<Record<string, unknown>>, 'stringOf'>,
-  ): FuzzyCorpus<Record<string, unknown>>;
+  /**
+   * Corpus searched by a single field of `T`.
+   * `field` supports dot-notation (`'platform.id'`); missing keys return `''`.
+   *
+   * @example
+   * ```ts
+   * const c = FuzzyCorpus.byKey(games, 'gameName');
+   * c.fuzzy('gems')[0].raw.gameId; // typed as Game
+   * ```
+   */
+  static byKey<T extends Record<string, any>>(
+    maps: Iterable<T> | undefined,
+    field: FieldPath<T> | (string & {}),
+    opts?: Omit<FuzzyCorpusInit<T>, 'stringOf'>,
+  ): FuzzyCorpus<T>;
 
-  /** Record-map corpus searched across multiple [fields]. First is the primary
-   *  key; the rest become alternate keys. `hit.matchedKey` is the field index. */
-  static byKeys(
-    maps: Iterable<Record<string, unknown>> | undefined,
-    fields: string[],
-    opts?: Omit<FuzzyCorpusInit<Record<string, unknown>>, 'stringOf'>,
-  ): FuzzyCorpus<Record<string, unknown>>;
+  /**
+   * Corpus searched across multiple fields of `T`.
+   * The first field is the primary key; the rest become alternate keys —
+   * `hit.matchedKey` is the index into `fields` that produced the hit.
+   * Supports dot-notation; missing keys return `''`.
+   *
+   * @example
+   * ```ts
+   * const c = FuzzyCorpus.byKeys(games, ['gameName', 'gameId']);
+   * c.exact('101024')[0].raw; // typed as Game; matchedKey === 1 (gameId)
+   * ```
+   */
+  static byKeys<T extends Record<string, any>>(
+    maps: Iterable<T> | undefined,
+    fields: (FieldPath<T> | (string & {}))[],
+    opts?: Omit<FuzzyCorpusInit<T>, 'stringOf'>,
+  ): FuzzyCorpus<T>;
 
   readonly length: number;
 
@@ -230,27 +271,19 @@ export declare class FuzzyCorpus<T = string> {
   refresh(source?: Iterable<T>): void;
   clear(): void;
 
-  /** Fuzzy (subsequence) search. Query supports `!`/`^`/`'`/`$` operators. */
-  fuzzy    (query: string, opts?: Partial<FuzzyOptions>): FuzzyHit<T>[];
-  /** Contiguous-substring search. */
-  substring(query: string, opts?: Partial<FuzzyOptions>): FuzzyHit<T>[];
-  /** Prefix search (item must start with `query`). */
-  prefix   (query: string, opts?: Partial<FuzzyOptions>): FuzzyHit<T>[];
-  /** Postfix search (item must end with `query`). */
-  postfix  (query: string, opts?: Partial<FuzzyOptions>): FuzzyHit<T>[];
-  /** Exact whole-string match. */
-  exact    (query: string, opts?: Partial<FuzzyOptions>): FuzzyHit<T>[];
+  /**
+   * Fuzzy (subsequence) search. Query supports fzf-style operators:
+   * `!term` negate · `^term` prefix · `'term` substring · `term$` postfix.
+   * Returns ranked `FuzzyHit<T>[]`; `hit.raw` is `T`.
+   *
+   * For exact / prefix / postfix / substring lookups prefer native
+   * `Array.filter` + `===` / `startsWith` / `endsWith` — they are faster
+   * for typical browser dataset sizes.
+   */
+  fuzzy(query: string, opts?: Partial<FuzzyOptions>): FuzzyHit<T>[];
 
-  /** Fuzzy search — raw items only, no FuzzyHit wrapper. Faster: skips highlight-index computation. */
-  fuzzyRaws    (query: string, opts?: Partial<FuzzyOptions>): T[];
-  /** Substring search — raw items. */
-  substringRaws(query: string, opts?: Partial<FuzzyOptions>): T[];
-  /** Prefix search — raw items. */
-  prefixRaws   (query: string, opts?: Partial<FuzzyOptions>): T[];
-  /** Postfix search — raw items. */
-  postfixRaws  (query: string, opts?: Partial<FuzzyOptions>): T[];
-  /** Exact search — raw items. */
-  exactRaws    (query: string, opts?: Partial<FuzzyOptions>): T[];
+  /** Fuzzy search — raw `T[]` only, no `FuzzyHit` wrapper. Faster: skips highlight-index computation. */
+  fuzzyRaws(query: string, opts?: Partial<FuzzyOptions>): T[];
 
   /** Release native memory. Idempotent. */
   dispose(): void;

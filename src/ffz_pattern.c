@@ -185,7 +185,15 @@ static ffz_pattern *build(const char *query, size_t n, ffz_case_matching cm,
     ffz_pattern *p = (ffz_pattern *)calloc(1, sizeof(*p));
     if (!p) return NULL;  // OOM: callers treat NULL as "no pattern"
     build_ctx ctx = {p, 0, cm, nm, kind, literal};
-    for_each_word(query, n, emit_atom, &ctx);
+    if (literal) {
+        /* Non-fuzzy modes (exact/prefix/postfix/substring): treat the full query
+         * as ONE atom — spaces are part of the literal, not term separators.
+         * e.g. exact("Super Gems 1000") must equal "Super Gems 1000", not match
+         * three separate atoms. */
+        emit_atom(&ctx, query, n);
+    } else {
+        for_each_word(query, n, emit_atom, &ctx);
+    }
     return p;
 }
 

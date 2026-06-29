@@ -1,8 +1,8 @@
 # @codejoo/ffuzzy
 
-Fast fuzzy search for the web — a WASM port of the [ffuzzy](https://github.com/icodejoo/ffuzzy) C engine.
+Ranked fuzzy search for the web — a WASM port of the [ffuzzy](https://github.com/icodejoo/ffuzzy) C engine.
 
-Five search modes · TypeScript · browser + Node · ~57 KB full / ~43 KB lite
+Fuzzy search only · TypeScript · browser + Node · ~57 KB full / ~43 KB lite
 
 ## Install
 
@@ -28,7 +28,7 @@ corpus.dispose();
 
 // Generic objects — hits carry the original object
 const files = new FuzzyCorpus(myFiles, { stringOf: f => f.path });
-const hit = files.prefix('src/')[0];
+const hit = files.fuzzy('src')[0];
 hit.raw;  // original object
 files.dispose();
 ```
@@ -47,17 +47,29 @@ import { ffuzzyInitialize, FuzzyCorpus } from '@codejoo/ffuzzy/lite';
 await ffuzzyInitialize();
 ```
 
-## Search modes
+## Search
 
-All modes accept an optional second argument to override corpus defaults.
+The high-level API exposes **fuzzy search only** — the one mode where WASM
+genuinely outperforms native JS (8-55× faster than fuse.js).
+
+For exact / prefix / postfix / substring lookups use native JS directly —
+`Array.filter` + `===` / `startsWith` / `endsWith` is faster at typical
+browser dataset sizes (< 100k items):
 
 ```ts
-corpus.fuzzy    ('src m')   // subsequence — supports ! ^ ' $ operators
-corpus.substring('src/')    // contiguous substring
-corpus.prefix   ('src/')    // must start with query
-corpus.postfix  ('.ts')     // must end with query
-corpus.exact    ('main.ts') // whole-string match
+// exact
+items.filter(g => g.gameId === '101024')
+
+// prefix / postfix
+items.filter(g => g.gameName.startsWith('Super'))
+items.filter(g => g.gameName.endsWith('1000'))
+
+// fuzzy — corpus is indispensable here
+corpus.fuzzy('gems', { limit: 50 })   // ranked, scored, multi-key
 ```
+
+`fuzzy` supports fzf-style operators: `!term` negate · `^term` prefix-force ·
+`'term` substring-force · `term$` postfix-force.
 
 ## Options
 
@@ -83,6 +95,30 @@ Per-call overrides:
 corpus.fuzzy('query', { limit: 10, caseMatching: FuzzyCase.respect });
 ```
 
+## Typed object search — `byKey` / `byKeys`
+
+`T` is inferred from the items array, so `hit.raw` is fully typed:
+
+```ts
+interface Game { gameId: string; gameName: string; platform: { id: string } }
+
+// Single field — hit.raw is Game
+const byName = FuzzyCorpus.byKey(games, 'gameName');
+byName.fuzzy('gems')[0].raw.gameId;   // ✓ typed as string
+
+// Multiple fields — matchedKey tells you which field matched
+const corpus = FuzzyCorpus.byKeys(games, ['gameName', 'gameId']);
+const hit = corpus.fuzzy('gems')[0];
+hit.raw.gameName;    // ✓ Game
+hit.matchedKey;      // 0 = gameName matched, 1 = gameId matched
+
+// Dot-notation for nested fields (IDE autocomplete included)
+const byPlatform = FuzzyCorpus.byKey(games, 'platform.id');
+byPlatform.fuzzy('226')[0]?.raw.gameId;  // ✓
+```
+
+Missing or null fields are silently treated as `''` — no runtime errors.
+
 ## Multi-key search (pinyin / romaji)
 
 ```ts
@@ -94,10 +130,7 @@ corpus.addKey(item, [
 ]);
 ```
 
-> Map corpora: `FuzzyCorpus.byKey(rows, 'name')` (one field) or
-> `FuzzyCorpus.byKeys(rows, ['name', 'email'])` (multi-field; `hit.matchedKey` is
-> the field index). Mutation: `add` / `addAll` / `addKey` / `update` / `removeAt`
-> / `removeWhere` / `refresh` / `clear`. Naming mirrors `ffuzzy.dart`.
+Mutation: `add` / `addAll` / `addKey` / `update` / `removeAt` / `removeWhere` / `refresh` / `clear`.
 
 ## Hit highlighting
 

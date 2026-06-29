@@ -178,3 +178,32 @@ FFZ_API void ffz_ffi_results_free(ffz_results *r) {
     ffz_results_free(r);
     free(r);
 }
+
+// --- bulk accessors: fill caller-provided arrays in one call ----------------
+// Reduces JS→WASM boundary crossings from O(N) to O(1) when reading results.
+
+// Fill out[0..n-1] with item indices. Returns actual count written (min(r->len, n)).
+FFZ_API size_t ffz_ffi_results_items_bulk(ffz_results *r,
+                                           uint32_t *out, size_t n) {
+    if (!r || !out) return 0;
+    size_t count = r->len < n ? r->len : n;
+    for (size_t i = 0; i < count; i++) out[i] = r->hits[i].item_index;
+    return count;
+}
+
+// Fill parallel arrays for item_index, score, matched_kind, matched_key.
+// Each array must hold at least min(r->len, n) elements. Returns count written.
+FFZ_API size_t ffz_ffi_results_bulk(ffz_results *r,
+                                     uint32_t *items, int32_t *scores,
+                                     int32_t *kinds,  uint32_t *keys,
+                                     size_t n) {
+    if (!r || !items || !scores || !kinds || !keys) return 0;
+    size_t count = r->len < n ? r->len : n;
+    for (size_t i = 0; i < count; i++) {
+        items[i]  = r->hits[i].item_index;
+        scores[i] = r->hits[i].score;
+        kinds[i]  = r->hits[i].matched_kind;
+        keys[i]   = r->hits[i].matched_key;
+    }
+    return count;
+}

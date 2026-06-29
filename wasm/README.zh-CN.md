@@ -2,9 +2,9 @@
 
 [English](README.md) | 中文
 
-为 Web 提供的高性能模糊搜索 —— [ffuzzy](https://github.com/icodejoo/ffuzzy) C 引擎的 WASM 移植版。
+为 Web 提供的高性能排名模糊搜索 —— [ffuzzy](https://github.com/icodejoo/ffuzzy) C 引擎的 WASM 移植版。
 
-五种搜索模式 · TypeScript · 浏览器 + Node · 完整版 ~57 KB / lite 版 ~43 KB
+仅模糊搜索 · TypeScript · 浏览器 + Node · 完整版 ~57 KB / lite 版 ~43 KB
 
 ## 安装
 
@@ -29,7 +29,7 @@ corpus.dispose();
 
 // 任意对象 —— 命中携带原对象
 const files = new FuzzyCorpus(myFiles, { stringOf: f => f.path });
-const hit = files.prefix('src/')[0];
+const hit = files.fuzzy('src')[0];
 hit.raw;  // 原始对象
 files.dispose();
 ```
@@ -47,17 +47,28 @@ import { ffuzzyInitialize, FuzzyCorpus } from '@codejoo/ffuzzy/lite';
 await ffuzzyInitialize();
 ```
 
-## 搜索模式
+## 搜索
 
-所有模式均接受可选的第二参数来覆盖语料默认选项。
+高层 API 只暴露**模糊搜索**——这是 WASM 真正碾压原生 JS 的唯一场景
+（比 fuse.js 快 8-55×）。
+
+精确 / 前缀 / 后缀 / 子串查询直接用原生 JS 即可——在典型浏览器数据量
+（< 10 万条）下，`Array.filter` 更快：
 
 ```ts
-corpus.fuzzy    ('src m')   // 子序列匹配 —— 支持 ! ^ ' $ 操作符
-corpus.substring('src/')    // 连续子串
-corpus.prefix   ('src/')    // 必须以 query 开头
-corpus.postfix  ('.ts')     // 必须以 query 结尾
-corpus.exact    ('main.ts') // 全串精确匹配
+// 精确
+items.filter(g => g.gameId === '101024')
+
+// 前缀 / 后缀
+items.filter(g => g.gameName.startsWith('Super'))
+items.filter(g => g.gameName.endsWith('1000'))
+
+// 模糊 —— corpus 不可替代
+corpus.fuzzy('gems', { limit: 50 })   // 排名、评分、多字段
 ```
+
+`fuzzy` 支持 fzf 风格操作符：`!term` 排除 · `^term` 强制前缀 ·
+`'term` 强制子串 · `term$` 强制后缀。
 
 ### 原始对象快捷方式（`*Raws`）
 
@@ -96,6 +107,30 @@ const corpus = new FuzzyCorpus(items, {
 corpus.fuzzy('query', { limit: 10, highlight: true });
 ```
 
+## 类型化对象搜索 —— `byKey` / `byKeys`
+
+泛型 `T` 从 items 数组自动推断，`hit.raw` 完全类型化：
+
+```ts
+interface Game { gameId: string; gameName: string; platform: { id: string } }
+
+// 单字段 — hit.raw 推断为 Game
+const byName = FuzzyCorpus.byKey(games, 'gameName');
+byName.fuzzy('gems')[0].raw.gameId;   // ✓ 类型为 string
+
+// 多字段 — matchedKey 告诉你哪个字段命中
+const corpus = FuzzyCorpus.byKeys(games, ['gameName', 'gameId']);
+const hit = corpus.fuzzy('gems')[0];
+hit.raw.gameName;   // ✓ Game
+hit.matchedKey;     // 0 = gameName 命中，1 = gameId 命中
+
+// 点路径访问嵌套字段（IDE 有自动补全）
+const byPlatform = FuzzyCorpus.byKey(games, 'platform.id');
+byPlatform.fuzzy('226')[0]?.raw.gameId;  // ✓
+```
+
+字段不存在或值为 `null`/`undefined` 时静默返回 `''`，不会报错。
+
 ## 多键搜索（拼音 / 罗马音）
 
 ```ts
@@ -107,9 +142,7 @@ corpus.addKey(item, [
 ]);
 ```
 
-> Map 语料：`FuzzyCorpus.byKey(rows, 'name')`（单字段）或
-> `FuzzyCorpus.byKeys(rows, ['name', 'email'])`（多字段；`hit.matchedKey` 是字段下标）。
-> 变更：`add` / `addAll` / `addKey` / `update` / `removeAt` / `removeWhere` / `refresh` / `clear`。
+变更：`add` / `addAll` / `addKey` / `update` / `removeAt` / `removeWhere` / `refresh` / `clear`。
 
 ## 命中高亮
 
