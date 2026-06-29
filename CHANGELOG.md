@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.0
+
+- **New: raw-object search.** Every match mode gains a `…Raws` variant that
+  returns the matched objects directly — no `FuzzyHit` wrapper — and an
+  async/single-result family alongside:
+  - `fuzzyRaws` / `substringRaws` / `prefixRaws` / `postfixRaws` / `suffixRaws`
+    / `exactRaws` (lists), their `…RawsAsync` twins, and `fuzzyRaw` /
+    `substringRaw` / `prefixRaw` / `postfixRaw` / `exactRaw` (+ `…RawAsync`) for
+    the single best hit.
+  - These skip Pass-2 highlight-index computation, so they're faster than the
+    `FuzzyHit`-returning methods when you only need the items, not
+    score/indices/metadata.
+- **New: `suffix` / `suffixAsync` / `suffixRaws` / `suffixRawsAsync`** — aliases
+  for the `postfix` family, matching the more idiomatic Dart naming.
+- **Fix: literal queries keep their spaces.** In the non-fuzzy modes
+  (`exact` / `prefix` / `postfix` / `substring`) the query is now treated as a
+  single literal atom, so `exact("Super Gems 1000")` matches that exact string
+  instead of being split into three space-separated terms. (Fuzzy mode still
+  parses space-separated terms and `! ^ ' $` operators as before.)
+- **C engine.** Added `ffz_corpus_filter_raws` (the skip-index scan behind the
+  `…Raws` methods) and bulk result accessors (`ffz_ffi_results_bulk`,
+  `ffz_ffi_results_items_bulk`) that fill caller arrays in one call — these cut
+  the result-read boundary crossings to O(1), chiefly benefiting the WASM build.
+
 ## 0.4.0
 
 - **New: scoring modes.** A `scoring:` parameter on `FuzzyOptions` and on every

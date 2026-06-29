@@ -23,3 +23,8 @@ docs/
 scripts/
 wasm/
 .claude/
+
+# Benchmark-only: a 7 MB corpus fixture and the bench test that loads it.
+# Real unit tests (test/corpus_mutation_test.dart) still ship.
+mock.json
+test/bench_native_test.dart
