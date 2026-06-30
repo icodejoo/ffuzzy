@@ -667,14 +667,17 @@ static void test_boundary_conditions(void) {
     // empty haystack
     CHECK(score(m, "a", "", NULL, FFZ_FUZZY) < 0, "empty haystack -> miss");
 
-    // Pattern layer strips leading/trailing whitespace from atoms, so " gem"
-    // and "gem " both become the atom "gem" before reaching ffz_match.
-    // The whitespace-disables-trim feature is a C-level ffz_match contract;
-    // test it here at the observable pattern-layer level.
-    CHECK(score(m, " gem", "  gem", NULL, FFZ_EXACT) >= 0,
-          "EXACT: pattern strips leading space, 'gem' still matches '  gem'");
-    CHECK(score(m, "gem ", "gem  ", NULL, FFZ_EXACT) >= 0,
-          "EXACT: pattern strips trailing space, 'gem' still matches 'gem  '");
+    // Literal modes keep the query's spaces (single literal atom, no atom
+    // trimming). A leading/trailing space in the needle disables the haystack's
+    // leading/trailing-ws trim on that side, so the spaces must line up exactly.
+    CHECK(score(m, " gem", " gem", NULL, FFZ_EXACT) >= 0,
+          "EXACT: needle's leading space matches a single leading space");
+    CHECK(score(m, " gem", "  gem", NULL, FFZ_EXACT) < 0,
+          "EXACT: needle's lone leading space != two haystack spaces");
+    CHECK(score(m, "gem ", "gem ", NULL, FFZ_EXACT) >= 0,
+          "EXACT: needle's trailing space matches a single trailing space");
+    CHECK(score(m, "gem ", "gem  ", NULL, FFZ_EXACT) < 0,
+          "EXACT: needle's lone trailing space != two haystack spaces");
 
     ffz_matcher_free(m);
 }
