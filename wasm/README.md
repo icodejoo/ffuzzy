@@ -1,5 +1,7 @@
 # @codejoo/ffuzzy
 
+English | [中文](README.zh-CN.md)
+
 Ranked fuzzy search for the web — a WASM port of the [ffuzzy](https://github.com/icodejoo/ffuzzy) C engine.
 
 Fuzzy search only · TypeScript · browser + Node · ~57 KB full / ~43 KB lite
@@ -176,6 +178,43 @@ interface FuzzyHit<T> {
   indices:     number[]; // matched codepoint positions — populated only when highlight:true
 }
 ```
+
+## Performance
+
+Benchmarked on a 4886-item game corpus (average 15-byte ASCII names, `limit: 50`).
+
+### vs fuzzysort and fuse.js
+
+| Items | ffuzzy | fuzzysort | fuse.js | vs fuzzysort | vs fuse.js |
+|------:|-------:|----------:|--------:|:------------:|:----------:|
+| 4 886 | 120-220 µs | **19-103 µs** | 1.8-6.7 ms | 0.13-0.48× | **8-56×** |
+| 9 772 | 240-415 µs | **32-193 µs** | 3.6-13 ms | 0.13-0.47× | **9-55×** |
+| 24 430 | 0.6-1.1 ms | **92-695 µs** | 12-35 ms | 0.14-0.64× | **11-56×** |
+| 48 860 | 1.4-2.8 ms | **238-2440 µs** | 18-75 ms | 0.14-0.88× | **7-57×** |
+
+Build time (one-off): ffuzzy **2-9 ms** · fuse.js 2-20 ms · fuzzysort 5-27 ms
+
+> fuzzysort is a pure-JS library that operates directly on V8-native strings with
+> no WASM boundary overhead — it wins on raw speed for ASCII-only text.
+> ffuzzy closes the gap on high-density queries (`"sp"` at 48k items: 2.77 vs 2.44 ms)
+> and wins decisively against fuse.js at all scales.
+
+### Feature comparison
+
+| | ffuzzy | fuzzysort | fuse.js |
+|--|:------:|:---------:|:-------:|
+| Speed (pure ASCII) | ★★★ | ★★★★★ | ★ |
+| vs fuse.js | **7-57× faster** | ~10× faster | baseline |
+| CJK / diacritic folding | ✅ | ❌ | △ |
+| Multi-key (pinyin / romaji) | ✅ `byKeys` | ❌ | ❌ |
+| Typed `byKey<T>` / dot-path | ✅ | ❌ | ❌ |
+| Dart FFI (Flutter) | ✅ | ❌ | ❌ |
+| Ranking quality | nucleo DP | prefix-biased | Bitap/Levenshtein |
+| Bundle size | ~57 KB | ~8 KB | ~24 KB |
+
+**When to choose ffuzzy over fuzzysort**: CJK content, pinyin/romaji transliteration,
+multi-field search (`byKeys`), or when you also use the Flutter/Dart package.
+For pure ASCII with no Unicode requirements, fuzzysort may be a lighter choice.
 
 ## Build from source
 

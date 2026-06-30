@@ -1,10 +1,6 @@
-// High-level FuzzyCorpus over the ffuzzy WASM engine. Naming mirrors ffuzzy.dart
-// (strings / byKey / byKeys / add / addAll / addKey / update / removeAt /
-// removeWhere / refresh / clear; fuzzy / substring / prefix / postfix / exact).
-//
-// This file is appended verbatim to each engine bundle by build.mjs. The WASM
-// module is held internally; call `ffuzzyInitialize()` once at startup, then use
-// FuzzyCorpus synchronously (no module handle to pass), exactly like Dart:
+// High-level FuzzyCorpus over the ffuzzy WASM engine. Naming mirrors ffuzzy.dart.
+// ES6-compatible: private state uses _underscore convention (no ES2022 # fields),
+// so this file can be processed by any modern bundler including OXC / Rolldown.
 //
 //   import { ffuzzyInitialize, FuzzyCorpus } from '@codejoo/ffuzzy';
 //   await ffuzzyInitialize();
@@ -15,12 +11,8 @@
 // --- internal WASM module singleton -----------------------------------------
 let _M = null;
 
-/// Initialize the WASM engine. Await once before constructing any FuzzyCorpus
-/// (WASM instantiation is async on the main thread). Idempotent.
 export async function ffuzzyInitialize(opts) {
   if (_M) return;
-  // The factory's export name differs per bundle (full vs lite); pick whichever
-  // this bundle defines. `typeof` on an undeclared identifier is safe.
   const factory =
     (typeof ffuzzyModule !== 'undefined') ? ffuzzyModule
     : (typeof ffuzzyModuleLite !== 'undefined') ? ffuzzyModuleLite
@@ -29,47 +21,37 @@ export async function ffuzzyInitialize(opts) {
   _M = await factory(opts);
 }
 
-/// True once ffuzzyInitialize() has completed.
 export function ffuzzyReady() { return _M !== null; }
 
 function _mod() {
-  if (!_M) {
-    throw new Error('ffuzzy not initialized — call `await ffuzzyInitialize()` once before using FuzzyCorpus');
-  }
+  if (!_M) throw new Error('ffuzzy not initialized — call `await ffuzzyInitialize()` once before using FuzzyCorpus');
   return _M;
 }
 
-export const FuzzyCase = Object.freeze({ respect: 0, ignore: 1, smart: 2 });
-export const FuzzyNorm = Object.freeze({ never: 0, smart: 1 });
-export const FuzzyMode = Object.freeze({ fuzzy: 0, substring: 1, prefix: 2, postfix: 3, exact: 4 });
+export const FuzzyCase    = Object.freeze({ respect: 0, ignore: 1, smart: 2 });
+export const FuzzyNorm    = Object.freeze({ never: 0, smart: 1 });
+export const FuzzyMode    = Object.freeze({ fuzzy: 0, substring: 1, prefix: 2, postfix: 3, exact: 4 });
 export const FuzzyScoring = Object.freeze({ fast: 0, off: 1, nucleo: 2 });
 export const FuzzyKeyKind = Object.freeze({ original: 0, pinyin: 1, initials: 2, romaji: 3, custom: 100 });
 
 export class FuzzyKey {
-  constructor(text, kind = FuzzyKeyKind.pinyin) {
+  constructor(text, kind) {
     this.text = text;
-    this.kind = kind;
+    this.kind = kind === undefined ? FuzzyKeyKind.pinyin : kind;
   }
   static kind(text, kind) { return new FuzzyKey(text, kind); }
 }
 
 export class FuzzyOptions {
-  constructor({
-    scoring = FuzzyScoring.fast,
-    caseMatching = FuzzyCase.smart,
-    normalization = FuzzyNorm.smart,
-    parallel = false,
-    threads = 0,
-    limit = 0,
-    highlight = false,
-  } = {}) {
-    this.scoring = scoring;
-    this.caseMatching = caseMatching;
-    this.normalization = normalization;
-    this.parallel = parallel;
-    this.threads = threads;
-    this.limit = limit;
-    this.highlight = highlight;
+  constructor(init) {
+    const o = init || {};
+    this.scoring       = o.scoring       !== undefined ? o.scoring       : FuzzyScoring.fast;
+    this.caseMatching  = o.caseMatching  !== undefined ? o.caseMatching  : FuzzyCase.smart;
+    this.normalization = o.normalization !== undefined ? o.normalization : FuzzyNorm.smart;
+    this.parallel      = o.parallel      !== undefined ? o.parallel      : false;
+    this.threads       = o.threads       !== undefined ? o.threads       : 0;
+    this.limit         = o.limit         !== undefined ? o.limit         : 0;
+    this.highlight     = o.highlight     !== undefined ? o.highlight     : false;
   }
 }
 
@@ -77,13 +59,14 @@ export class FuzzyOptions {
 // Returns '' for any missing key or null/undefined value — never throws.
 function _get(obj, path) {
   if (obj == null) return '';
-  if (!path.includes('.')) return String(obj[path] ?? '');
+  if (path.indexOf('.') === -1) { const v = obj[path]; return v == null ? '' : String(v); }
   let cur = obj;
-  for (const k of path.split('.')) {
+  const parts = path.split('.');
+  for (let i = 0; i < parts.length; i++) {
     if (cur == null) return '';
-    cur = cur[k];
+    cur = cur[parts[i]];
   }
-  return String(cur ?? '');
+  return cur == null ? '' : String(cur);
 }
 
 function _utf8(M, s) {
@@ -93,385 +76,325 @@ function _utf8(M, s) {
   return [p, n];
 }
 
-// Initial scratch capacity (uint32 slots). Grows if a query returns more hits.
 const SCRATCH_INIT = 256;
 
 export class FuzzyCorpus {
-  #M;
-  #ptr;
-  #items = [];
-  #keys = [];
-  #stringOf;
-  #opts;
-  #disposed = false;
-  // Pre-allocated scratch buffers — reused across calls to avoid malloc/free per query.
-  // #scratch holds item indices; #scratch4 holds [items, scores, kinds, keys] × cap.
-  #scratch;     // uint32_t* for bulk item-index reads  (capacity = #scratchCap)
-  #scratch4;    // uint32_t* for full-hit bulk reads    (capacity = #scratchCap × 4)
-  #scratchCap = 0;
+  constructor(items, init) {
+    const opts = init || {};
+    const stringOf    = opts.stringOf    || String;
+    const options     = opts.options;
+    const matchPaths  = opts.matchPaths  || false;
+    const preferPrefix = opts.preferPrefix || false;
 
-  constructor(items = [], {
-    stringOf = String,
-    options,
-    matchPaths = false,
-    preferPrefix = false,
-  } = {}) {
     const M = _mod();
-    this.#M = M;
-    this.#stringOf = stringOf;
-    this.#opts = new FuzzyOptions(options);
-    const sc = this.#opts.scoring;
-    this.#ptr = M._ffz_ffi_new_cfg2
+    this._M         = M;
+    this._stringOf  = stringOf;
+    this._opts      = new FuzzyOptions(options);
+    this._items     = [];
+    this._keys      = [];
+    this._disposed  = false;
+    this._scratch   = 0;
+    this._scratch4  = 0;
+    this._scratchCap = 0;
+
+    const sc = this._opts.scoring;
+    this._ptr = M._ffz_ffi_new_cfg2
       ? M._ffz_ffi_new_cfg2(matchPaths ? 1 : 0, preferPrefix ? 1 : 0, sc)
       : M._ffz_ffi_new_cfg(matchPaths ? 1 : 0, preferPrefix ? 1 : 0);
-    if (!this.#ptr) throw new Error('FuzzyCorpus: native allocation failed (out of memory)');
-    this.#allocScratch(SCRATCH_INIT);
-    this.addAll(items);
+    if (!this._ptr) throw new Error('FuzzyCorpus: native allocation failed (out of memory)');
+    this._allocScratch(SCRATCH_INIT);
+    if (items) this.addAll(items);
   }
 
-  // Allocate (or grow) the scratch buffers.
-  #allocScratch(cap) {
-    const M = this.#M;
-    if (this.#scratchCap) { M._free(this.#scratch); M._free(this.#scratch4); }
-    this.#scratch  = M._malloc(cap * 4);          // uint32_t[cap]
-    this.#scratch4 = M._malloc(cap * 4 * 4);      // uint32_t[cap × 4]
-    this.#scratchCap = cap;
+  _allocScratch(cap) {
+    const M = this._M;
+    if (this._scratchCap) { M._free(this._scratch); M._free(this._scratch4); }
+    this._scratch   = M._malloc(cap * 4);
+    this._scratch4  = M._malloc(cap * 4 * 4);
+    this._scratchCap = cap;
   }
 
-  // Ensure scratch is large enough; doubles if needed.
-  #ensureScratch(n) {
-    if (n > this.#scratchCap) this.#allocScratch(Math.max(n, this.#scratchCap * 2));
+  _ensureScratch(n) {
+    if (n > this._scratchCap) this._allocScratch(Math.max(n, this._scratchCap * 2));
   }
 
-  /** Plain-string corpus — each item is its own search text. */
-  static strings(items = [], opts = {}) {
-    return new FuzzyCorpus(items, { ...opts, stringOf: String });
+  static strings(items, opts) {
+    return new FuzzyCorpus(items || [], Object.assign({}, opts, { stringOf: String }));
   }
 
-  /** Record-map corpus searched by one [field] (supports dot-notation: 'a.b'). */
-  static byKey(maps = [], field, opts = {}) {
-    return new FuzzyCorpus(maps, { ...opts, stringOf: (m) => _get(m, field) });
+  static byKey(maps, field, opts) {
+    return new FuzzyCorpus(maps || [], Object.assign({}, opts, { stringOf: function(m) { return _get(m, field); } }));
   }
 
-  /** Record-map corpus searched across multiple [fields] (supports dot-notation).
-   *  The first is the primary key; the rest become alternate keys.
-   *  `hit.matchedKey` is the index into [fields] that produced the hit.
-   *  Missing or null fields are silently treated as empty string. */
-  static byKeys(maps = [], fields, opts = {}) {
+  static byKeys(maps, fields, opts) {
     if (!fields || fields.length === 0) throw new Error('byKeys: fields must not be empty');
-    const corpus = new FuzzyCorpus([], { ...opts, stringOf: (m) => _get(m, fields[0]) });
-    for (const item of maps) {
+    const corpus = new FuzzyCorpus([], Object.assign({}, opts, { stringOf: function(m) { return _get(m, fields[0]); } }));
+    const arr = maps || [];
+    for (let i = 0; i < arr.length; i++) {
+      const item = arr[i];
       if (fields.length === 1) {
         corpus.add(item);
       } else {
-        corpus.addKey(item, fields.slice(1).map((f) => new FuzzyKey(_get(item, f), FuzzyKeyKind.custom)));
+        corpus.addKey(item, fields.slice(1).map(function(f) { return new FuzzyKey(_get(item, f), FuzzyKeyKind.custom); }));
       }
     }
     return corpus;
   }
 
-  get length() { this.#alive(); return this.#items.length; }
+  get length() { this._alive(); return this._items.length; }
 
   add(item) {
-    this.#alive();
-    this.#nativeAdd(item, null);
-    this.#items.push(item);
-    this.#keys.push(null);
+    this._alive();
+    this._nativeAdd(item, null);
+    this._items.push(item);
+    this._keys.push(null);
   }
 
-  addAll(items) { for (const it of items) this.add(it); }
+  addAll(items) { for (let i = 0; i < items.length; i++) this.add(items[i]); }
 
-  /** Append [item] with explicit alternate search [keys] (pinyin/romaji/...).
-   *  The original text (`stringOf(item)`) is added automatically. */
   addKey(item, keys) {
-    this.#alive();
+    this._alive();
     const ks = keys && keys.length ? keys : null;
-    this.#nativeAdd(item, ks);
-    this.#items.push(item);
-    this.#keys.push(ks);
+    this._nativeAdd(item, ks);
+    this._items.push(item);
+    this._keys.push(ks);
   }
 
-  /** Replace the item at [index] (its alternate keys are dropped). O(n) rebuild. */
   update(index, item) {
-    this.#alive(); this.#bounds(index);
-    this.#items[index] = item;
-    this.#keys[index] = null;
-    this.#rebuild();
+    this._alive(); this._bounds(index);
+    this._items[index] = item;
+    this._keys[index]  = null;
+    this._rebuild();
   }
 
-  /** Remove the item at [index]. O(n) rebuild. */
   removeAt(index) {
-    this.#alive(); this.#bounds(index);
-    this.#items.splice(index, 1);
-    this.#keys.splice(index, 1);
-    this.#rebuild();
+    this._alive(); this._bounds(index);
+    this._items.splice(index, 1);
+    this._keys.splice(index, 1);
+    this._rebuild();
   }
 
-  /** Remove every item for which [test] is true; returns how many were removed. */
   removeWhere(test) {
-    this.#alive();
+    this._alive();
     let removed = 0;
-    for (let i = this.#items.length - 1; i >= 0; i--) {
-      if (test(this.#items[i])) {
-        this.#items.splice(i, 1);
-        this.#keys.splice(i, 1);
+    for (let i = this._items.length - 1; i >= 0; i--) {
+      if (test(this._items[i])) {
+        this._items.splice(i, 1);
+        this._keys.splice(i, 1);
         removed++;
       }
     }
-    if (removed) this.#rebuild();
+    if (removed) this._rebuild();
     return removed;
   }
 
-  /** Re-add current items (after their text changed), or replace the whole data
-   *  set when [source] is given. */
   refresh(source) {
-    this.#alive();
+    this._alive();
     if (source) {
-      this.#items = [...source];
-      this.#keys = this.#items.map(() => null);
+      this._items = Array.from(source);
+      this._keys  = this._items.map(function() { return null; });
     }
-    this.#rebuild();
+    this._rebuild();
   }
 
-  /** Remove all items; the corpus stays usable. */
   clear() {
-    this.#alive();
-    this.#M._ffz_ffi_clear(this.#ptr);
-    this.#items.length = 0;
-    this.#keys.length = 0;
+    this._alive();
+    this._M._ffz_ffi_clear(this._ptr);
+    this._items.length = 0;
+    this._keys.length  = 0;
   }
 
   /** Fuzzy (subsequence) search. Query supports `!`/`^`/`'`/`$` operators. */
-  fuzzy(query, opts = {}) { return this.#search(0, query, opts); }
+  fuzzy(query, opts)     { return this._search(0, query, opts || {}); }
 
-  /** Fuzzy search — raw `T[]` only, no FuzzyHit wrapper. Faster: skips highlight-index computation. */
-  fuzzyRaws(query, opts = {}) { return this.#searchRaws(0, query, opts); }
+  /** Fuzzy search — raw items only, no FuzzyHit wrapper. */
+  fuzzyRaws(query, opts) { return this._searchRaws(0, query, opts || {}); }
 
   dispose() {
-    if (this.#disposed) return;
-    this.#disposed = true;
-    const M = this.#M;
-    M._ffz_ffi_free(this.#ptr);
-    if (this.#scratchCap) { M._free(this.#scratch); M._free(this.#scratch4); }
+    if (this._disposed) return;
+    this._disposed = true;
+    const M = this._M;
+    M._ffz_ffi_free(this._ptr);
+    if (this._scratchCap) { M._free(this._scratch); M._free(this._scratch4); }
   }
 
-  [Symbol.dispose]() { this.dispose(); }
-
-  // ── internals ───────────────────────────────────────────────────────────
-  #nativeAdd(item, keys) {
-    const M = this.#M;
+  // ── internals ───────────────────────────────────────────────────────────────
+  _nativeAdd(item, keys) {
+    const M = this._M;
     if (!keys) {
-      const [p, n] = _utf8(M, this.#stringOf(item));
-      M._ffz_ffi_add(this.#ptr, p, n);
-      M._free(p);
+      const pair = _utf8(M, this._stringOf(item));
+      M._ffz_ffi_add(this._ptr, pair[0], pair[1]);
+      M._free(pair[0]);
       return;
     }
     const nk = keys.length;
-    const [ip, ilen] = _utf8(M, this.#stringOf(item));
-    const tP = M._malloc(4 * nk);
-    const lP = M._malloc(4 * nk);
-    const kP = M._malloc(4 * nk);
+    const ip  = _utf8(M, this._stringOf(item));
+    const tP  = M._malloc(4 * nk);
+    const lP  = M._malloc(4 * nk);
+    const kP  = M._malloc(4 * nk);
     const kPtrs = [];
     try {
       for (let i = 0; i < nk; i++) {
-        const [p, len] = _utf8(M, keys[i].text);
-        kPtrs.push(p);
-        M.HEAPU32[(tP >> 2) + i] = p;
-        M.HEAPU32[(lP >> 2) + i] = len;
+        const kp = _utf8(M, keys[i].text);
+        kPtrs.push(kp[0]);
+        M.HEAPU32[(tP >> 2) + i] = kp[0];
+        M.HEAPU32[(lP >> 2) + i] = kp[1];
         M.HEAP32 [(kP >> 2) + i] = keys[i].kind;
       }
-      M._ffz_ffi_add_keyed(this.#ptr, ip, ilen, tP, lP, kP, nk);
+      M._ffz_ffi_add_keyed(this._ptr, ip[0], ip[1], tP, lP, kP, nk);
     } finally {
-      for (const p of kPtrs) M._free(p);
-      M._free(tP); M._free(lP); M._free(kP); M._free(ip);
+      for (let i = 0; i < kPtrs.length; i++) M._free(kPtrs[i]);
+      M._free(tP); M._free(lP); M._free(kP); M._free(ip[0]);
     }
   }
 
-  #rebuild() {
-    this.#M._ffz_ffi_clear(this.#ptr);
-    for (let i = 0; i < this.#items.length; i++) this.#nativeAdd(this.#items[i], this.#keys[i]);
+  _rebuild() {
+    this._M._ffz_ffi_clear(this._ptr);
+    for (let i = 0; i < this._items.length; i++) this._nativeAdd(this._items[i], this._keys[i]);
   }
 
-  #filter(mode, query, o) {
-    const M = this.#M;
-    const [qp, qn] = _utf8(M, query);
+  _filter(mode, query, o) {
+    const M = this._M;
+    const qp = _utf8(M, query);
     let res;
     if (o.highlight) {
-      // highlight=true: need Pass 2 — use filterEx2 so C computes indices.
       res = M._ffz_ffi_filter_ex2
-        ? M._ffz_ffi_filter_ex2(this.#ptr, qp, qn, mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads ?? 0, o.limit ?? 0, o.scoring ?? 0)
-        : M._ffz_ffi_filter_ex(this.#ptr, qp, qn, mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads ?? 0, o.limit ?? 0);
+        ? M._ffz_ffi_filter_ex2(this._ptr, qp[0], qp[1], mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads || 0, o.limit || 0, o.scoring || 0)
+        : M._ffz_ffi_filter_ex(this._ptr, qp[0], qp[1], mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads || 0, o.limit || 0);
     } else {
-      // highlight=false (default): skip Pass 2 via filter_raws — faster.
       res = M._ffz_ffi_filter_raws
-        ? M._ffz_ffi_filter_raws(this.#ptr, qp, qn, mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads ?? 0, o.limit ?? 0, o.scoring ?? 0)
+        ? M._ffz_ffi_filter_raws(this._ptr, qp[0], qp[1], mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads || 0, o.limit || 0, o.scoring || 0)
         : M._ffz_ffi_filter_ex2
-          ? M._ffz_ffi_filter_ex2(this.#ptr, qp, qn, mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads ?? 0, o.limit ?? 0, o.scoring ?? 0)
-          : M._ffz_ffi_filter_ex(this.#ptr, qp, qn, mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads ?? 0, o.limit ?? 0);
+          ? M._ffz_ffi_filter_ex2(this._ptr, qp[0], qp[1], mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads || 0, o.limit || 0, o.scoring || 0)
+          : M._ffz_ffi_filter_ex(this._ptr, qp[0], qp[1], mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads || 0, o.limit || 0);
     }
-    M._free(qp);
+    M._free(qp[0]);
     if (!res) throw new Error('FuzzyCorpus: filter failed (out of memory or invalid parameters)');
     return res;
   }
 
-  // FuzzyHit path. highlight=false: bulk-read all 4 fields in 1 WASM call.
-  // highlight=true: bulk-read 4 fields + per-hit index reads (rare path).
-  #search(mode, query, overrides) {
-    this.#alive();
-    const M = this.#M;
-    const o = { ...this.#opts, ...overrides };
-    const res = this.#filter(mode, query, o);
-    const len = M._ffz_ffi_results_len(res);   // 1 WASM call
+  _search(mode, query, overrides) {
+    this._alive();
+    const M  = this._M;
+    const o  = Object.assign({}, this._opts, overrides);
+    const res = this._filter(mode, query, o);
+    const len = M._ffz_ffi_results_len(res);
     if (len === 0) { M._ffz_ffi_results_free(res); return []; }
 
     const hasBulk = typeof M._ffz_ffi_results_bulk === 'function';
     const hits = new Array(len);
 
     if (hasBulk && !o.highlight) {
-      // Fast path: 1 WASM call fills items+scores+kinds+keys into scratch buffers.
-      this.#ensureScratch(len);
-      const sp = this.#scratch4 >> 2;          // HEAPU32 offset (uint32_t stride)
+      this._ensureScratch(len);
+      const sp        = this._scratch4 >> 2;
       const itemsOff  = sp;
       const scoresOff = sp + len;
       const kindsOff  = sp + len * 2;
       const keysOff   = sp + len * 3;
       M._ffz_ffi_results_bulk(res,
-        this.#scratch4,              // items ptr
-        this.#scratch4 + len * 4,    // scores ptr (int32, same byte stride as uint32)
-        this.#scratch4 + len * 8,    // kinds ptr
-        this.#scratch4 + len * 12,   // keys ptr
-        len);                        // 1 WASM call
+        this._scratch4,
+        this._scratch4 + len * 4,
+        this._scratch4 + len * 8,
+        this._scratch4 + len * 12,
+        len);
       const H = M.HEAPU32;
       const I = M.HEAP32;
       for (let i = 0; i < len; i++) {
         const idx = H[itemsOff + i];
-        hits[i] = {
-          raw: this.#items[idx], index: idx,
-          score: I[scoresOff + i], matchedKind: I[kindsOff + i],
-          matchedKey: H[keysOff + i], indices: [],
-        };
+        hits[i] = { raw: this._items[idx], index: idx, score: I[scoresOff + i], matchedKind: I[kindsOff + i], matchedKey: H[keysOff + i], indices: [] };
       }
     } else {
-      // Slow path (highlight:true or no bulk): per-hit WASM calls.
       const canIdx = o.highlight && typeof M._ffz_ffi_results_nindices === 'function';
       for (let i = 0; i < len; i++) {
         const idx = M._ffz_ffi_results_item(res, i);
         let indices = [];
         if (canIdx) {
           const ni = M._ffz_ffi_results_nindices(res, i);
-          indices = Array.from({ length: ni }, (_, j) => M._ffz_ffi_results_index(res, i, j));
+          indices = new Array(ni);
+          for (let j = 0; j < ni; j++) indices[j] = M._ffz_ffi_results_index(res, i, j);
         }
-        hits[i] = {
-          raw: this.#items[idx], index: idx,
-          score: M._ffz_ffi_results_score(res, i),
-          matchedKind: M._ffz_ffi_results_kind(res, i),
-          matchedKey: M._ffz_ffi_results_key(res, i),
-          indices,
-        };
+        hits[i] = { raw: this._items[idx], index: idx, score: M._ffz_ffi_results_score(res, i), matchedKind: M._ffz_ffi_results_kind(res, i), matchedKey: M._ffz_ffi_results_key(res, i), indices };
       }
     }
-    M._ffz_ffi_results_free(res);   // 1 WASM call
+    M._ffz_ffi_results_free(res);
     return hits;
   }
 
-  // Raw-items path. Bulk-reads only item indices in 1 WASM call.
-  #searchRaws(mode, query, overrides) {
-    this.#alive();
-    const M = this.#M;
-    const o = { ...this.#opts, ...overrides };
+  _searchRaws(mode, query, overrides) {
+    this._alive();
+    const M = this._M;
+    const o = Object.assign({}, this._opts, overrides);
     let res;
     if (typeof M._ffz_ffi_filter_raws === 'function') {
-      const [qp, qn] = _utf8(M, query);
-      res = M._ffz_ffi_filter_raws(this.#ptr, qp, qn, mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads ?? 0, o.limit ?? 0, o.scoring ?? 0);
-      M._free(qp);
+      const qp = _utf8(M, query);
+      res = M._ffz_ffi_filter_raws(this._ptr, qp[0], qp[1], mode, o.caseMatching, o.normalization, o.parallel ? 1 : 0, o.threads || 0, o.limit || 0, o.scoring || 0);
+      M._free(qp[0]);
       if (!res) throw new Error('FuzzyCorpus: filter_raws failed (out of memory or invalid parameters)');
     } else {
-      res = this.#filter(mode, query, o);
+      res = this._filter(mode, query, o);
     }
-    const len = M._ffz_ffi_results_len(res);   // 1 WASM call
+    const len = M._ffz_ffi_results_len(res);
     if (len === 0) { M._ffz_ffi_results_free(res); return []; }
 
-    const hasBulk = typeof M._ffz_ffi_results_items_bulk === 'function';
     let out;
-    if (hasBulk) {
-      // Fast path: 1 WASM call writes all indices into scratch, 0 per-item calls.
-      this.#ensureScratch(len);
-      M._ffz_ffi_results_items_bulk(res, this.#scratch, len);   // 1 WASM call
-      const H = M.HEAPU32;
-      const base = this.#scratch >> 2;
+    if (typeof M._ffz_ffi_results_items_bulk === 'function') {
+      this._ensureScratch(len);
+      M._ffz_ffi_results_items_bulk(res, this._scratch, len);
+      const H    = M.HEAPU32;
+      const base = this._scratch >> 2;
       out = new Array(len);
-      for (let i = 0; i < len; i++) out[i] = this.#items[H[base + i]];
+      for (let i = 0; i < len; i++) out[i] = this._items[H[base + i]];
     } else {
       out = [];
-      for (let i = 0; i < len; i++) out.push(this.#items[M._ffz_ffi_results_item(res, i)]);
+      for (let i = 0; i < len; i++) out.push(this._items[M._ffz_ffi_results_item(res, i)]);
     }
-    M._ffz_ffi_results_free(res);   // 1 WASM call
+    M._ffz_ffi_results_free(res);
     return out;
   }
 
-  #alive() {
-    if (this.#disposed) throw new Error('FuzzyCorpus used after dispose()');
+  _alive() {
+    if (this._disposed) throw new Error('FuzzyCorpus used after dispose()');
   }
 
-  #bounds(index) {
-    if (index < 0 || index >= this.#items.length) {
-      throw new RangeError(`index ${index} out of range [0, ${this.#items.length})`);
-    }
+  _bounds(index) {
+    if (index < 0 || index >= this._items.length)
+      throw new RangeError('index ' + index + ' out of range [0, ' + this._items.length + ')');
   }
 }
 
-/**
- * Convert codepoint indices (as in `FuzzyHit.indices`) to UTF-16 code-unit
- * offsets into `text`, suitable for DOM range / highlight APIs.
- * For BMP-only text (ASCII, CJK) this is a no-op; matters for emoji.
- */
+// ES6 Symbol.dispose support (optional chaining not needed — check first)
+if (typeof Symbol !== 'undefined' && Symbol.dispose) {
+  FuzzyCorpus.prototype[Symbol.dispose] = function() { this.dispose(); };
+}
+
 export function fuzzyCodepointToUtf16(text, codepointIndices) {
   if (!codepointIndices.length) return [];
   const offsets = [];
   let u16 = 0;
-  for (const ch of text) {
+  const chars = Array.from(text);
+  for (let i = 0; i < chars.length; i++) {
     offsets.push(u16);
-    u16 += ch.codePointAt(0) > 0xFFFF ? 2 : 1;
+    u16 += chars[i].codePointAt(0) > 0xFFFF ? 2 : 1;
   }
-  return codepointIndices.map((c) => (c >= 0 && c < offsets.length ? offsets[c] : u16));
+  return codepointIndices.map(function(c) { return (c >= 0 && c < offsets.length) ? offsets[c] : u16; });
 }
 
-// ── _esc: HTML-escape a single codepoint string (prevents XSS) ─────────────
 function _esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/**
- * Wrap matched characters in an HTML tag for search-result highlighting.
- *
- * Adjacent matched codepoints are merged into one tag, so the output is
- * `<mark>src</mark>/main.dart` rather than `<mark>s</mark><mark>r</mark>…`.
- * Non-matched text is HTML-escaped to prevent XSS.
- *
- * @param {string} text   - Item text (e.g. `hit.raw`).
- * @param {number[]} indices - Codepoint indices from `FuzzyHit.indices`
- *                            (requires `highlight: true` on the search call).
- * @param {object}  [opts]
- * @param {string}  [opts.tag='mark'] - HTML tag wrapping matched chars.
- * @returns {string} HTML string ready for `innerHTML`.
- *
- * @example
- * const hits = corpus.fuzzy('src', { highlight: true });
- * el.innerHTML = highlightHtml(hits[0].raw, hits[0].indices);
- * // → '<mark>src</mark>/main.dart'
- */
-export function highlightHtml(text, indices, { tag = 'mark' } = {}) {
+export function highlightHtml(text, indices, opts) {
+  const tag = (opts && opts.tag) ? opts.tag : 'mark';
   if (!indices || indices.length === 0) return _esc(text);
   const set = new Set(indices);
-  const codepoints = [...text]; // spread by Unicode codepoint, not UTF-16 unit
+  const codepoints = Array.from(text);
   let out = '', open = false;
   for (let i = 0; i < codepoints.length; i++) {
     const matched = set.has(i);
-    if (matched && !open)  { out += `<${tag}>`; open = true; }
-    if (!matched && open)  { out += `</${tag}>`; open = false; }
+    if (matched && !open)  { out += '<' + tag + '>'; open = true; }
+    if (!matched && open)  { out += '</' + tag + '>'; open = false; }
     out += _esc(codepoints[i]);
   }
-  if (open) out += `</${tag}>`;
+  if (open) out += '</' + tag + '>';
   return out;
 }
-
